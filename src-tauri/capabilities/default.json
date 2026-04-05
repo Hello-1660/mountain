@@ -12,6 +12,7 @@
     "core:window:allow-center",
     "opener:default",
     "dialog:default",
-    "window-state:default"
+    "window-state:default",
+    "autostart:default"
   ]
 }

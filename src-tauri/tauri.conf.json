@@ -15,7 +15,7 @@
         "label": "dock",
         "title": "便捷启动",
         "width": 560,
-        "height": 76,
+        "height": 80,
         "resizable": false,
         "maximizable": false,
         "minimizable": true,
@@ -23,7 +23,8 @@
         "transparent": true,
         "shadow": false,
         "skipTaskbar": true,
-        "center": true
+        "center": true,
+        "alwaysOnBottom": true
       },
       {
         "label": "library",
@@ -32,16 +33,22 @@
         "height": 640,
         "resizable": true,
         "visible": false,
-        "center": true
+        "center": true,
+        "theme": "Dark",
+        "backgroundColor": "#1a1b1f"
       }
     ],
     "security": {
-      "csp": null
+      "csp": null,
+      "assetProtocol": {
+        "enable": true,
+        "scope": ["$APPDATA/**"]
+      }
     }
   },
   "bundle": {
     "active": true,
-    "targets": "all",
+    "targets": ["nsis"],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
