@@ -20,10 +20,20 @@
   border-bottom: 1px solid rgba(255, 255, 255, 0.06);
 }
 
+.lib-header-titles {
+  min-width: 0;
+}
+
 .lib-header h1 {
   margin: 0;
   font-size: 1.15rem;
   font-weight: 600;
+}
+
+.lib-catalog-meta {
+  margin: 0.25rem 0 0;
+  font-size: 0.78rem;
+  color: rgba(255, 255, 255, 0.42);
 }
 
 .lib-actions {
@@ -152,15 +162,40 @@
 .lib-row {
   width: 100%;
   display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 0.15rem;
-  padding: 0.55rem 0.75rem;
+  flex-direction: row;
+  align-items: center;
+  gap: 0.65rem;
+  padding: 0.45rem 0.75rem;
   border: none;
   border-bottom: 1px solid rgba(255, 255, 255, 0.04);
   background: transparent;
   color: inherit;
   text-align: left;
+}
+
+.lib-row-icon {
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
+  flex-shrink: 0;
+  object-fit: cover;
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.lib-row-icon-fallback {
+  display: grid;
+  place-items: center;
+  font-weight: 600;
+  font-size: 0.95rem;
+  color: rgba(255, 255, 255, 0.88);
+}
+
+.lib-row-text {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.15rem;
+  min-width: 0;
 }
 
 .lib-row:last-child {
@@ -201,6 +236,23 @@
   margin: 0 0 0.75rem;
   font-size: 0.95rem;
   font-weight: 600;
+}
+
+.lib-detail-icon {
+  width: 56px;
+  height: 56px;
+  border-radius: 12px;
+  object-fit: cover;
+  margin-bottom: 0.85rem;
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.lib-detail-icon-fallback {
+  display: grid;
+  place-items: center;
+  font-size: 1.35rem;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.9);
 }
 
 .lib-muted {

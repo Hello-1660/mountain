@@ -15,12 +15,12 @@
         "label": "dock",
         "title": "便捷启动",
         "width": 560,
-        "height": 76,
+        "height": 80,
         "resizable": false,
         "maximizable": false,
         "minimizable": true,
         "decorations": false,
-        "transparent": true,
+        "transparent": false,
         "shadow": false,
         "skipTaskbar": true,
         "center": true
@@ -36,7 +36,11 @@
       }
     ],
     "security": {
-      "csp": null
+      "csp": null,
+      "assetProtocol": {
+        "enable": true,
+        "scope": ["$APPDATA/**"]
+      }
     }
   },
   "bundle": {

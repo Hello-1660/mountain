@@ -4,7 +4,8 @@
   align-items: center;
   justify-content: center;
   padding: 6px;
-  background: transparent;
+  /* 与无边框非透明窗口背景一致，避免误以为是「点了没反应」其实是点到桌面 */
+  background: #141416;
 }
 
 .dock-loading {
@@ -14,12 +15,35 @@
 }
 
 .dock-strip {
+  display: flex;
+  flex-direction: row;
+  align-items: stretch;
   border-radius: 18px;
-  padding: 8px 10px;
+  padding: 8px 0;
   background: rgba(28, 28, 32, 0.94);
   border: 1px solid rgba(255, 255, 255, 0.08);
   box-shadow: 0 12px 40px rgba(0, 0, 0, 0.45);
+  -webkit-app-region: no-drag;
+}
+
+/* 仅两侧细条拖动窗口，避免盖住图标上的 HTML5 拖放（WebView2 常见问题） */
+.dock-drag-gutter {
+  flex-shrink: 0;
+  width: 16px;
+  align-self: stretch;
   -webkit-app-region: drag;
+}
+
+.dock-drag-gutter--start {
+  border-top-left-radius: 16px;
+  border-bottom-left-radius: 16px;
+  margin-left: 2px;
+}
+
+.dock-drag-gutter--end {
+  border-top-right-radius: 16px;
+  border-bottom-right-radius: 16px;
+  margin-right: 2px;
 }
 
 .dock-items {
@@ -27,6 +51,9 @@
   flex-direction: row;
   align-items: center;
   gap: 8px;
+  padding: 0 6px;
+  flex: 1;
+  min-width: 0;
   -webkit-app-region: no-drag;
 }
 
@@ -38,12 +65,18 @@
   border-radius: 12px;
   background: linear-gradient(145deg, #3a3d46, #2c2e34);
   color: #f2f2f4;
-  cursor: pointer;
+  cursor: grab;
   flex-shrink: 0;
   display: grid;
   place-items: center;
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
   transition: transform 0.12s ease, background 0.12s ease;
+  user-select: none;
+  -webkit-user-drag: element;
+}
+
+.dock-tile:active {
+  cursor: grabbing;
 }
 
 .dock-tile:hover {
@@ -51,13 +84,21 @@
   background: linear-gradient(145deg, #4a4e5a, #353840);
 }
 
-.dock-tile:active {
+.dock-tile:not(.dock-tile-more):active {
   transform: translateY(0);
 }
 
 .dock-tile-initial {
   font-weight: 600;
   font-size: 1.05rem;
+}
+
+.dock-tile-img {
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  object-fit: cover;
+  pointer-events: none;
 }
 
 .dock-tile-remove {
@@ -83,6 +124,8 @@
 }
 
 .dock-tile-more {
+  cursor: pointer;
+  -webkit-user-drag: none;
   background: linear-gradient(145deg, #2f4a6f, #243652);
   font-size: 1.35rem;
   line-height: 1;

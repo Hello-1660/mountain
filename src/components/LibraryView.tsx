@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { appIconSrc } from "../appIconSrc";
 import type {
+  AppCatalogDto,
   AppGroup,
   AppStore,
   DockItem,
@@ -20,6 +22,55 @@ function debounce<T extends (...args: Parameters<T>) => void>(
   };
 }
 
+function formatScannedAt(ms: number | null): string {
+  if (ms == null) return "";
+  try {
+    return new Date(ms).toLocaleString();
+  } catch {
+    return "";
+  }
+}
+
+function LibRowIcon({ app }: { app: ScannedApp }) {
+  const [broken, setBroken] = useState(false);
+  const src = useMemo(() => appIconSrc(app.iconPath), [app.iconPath]);
+  if (src && !broken) {
+    return (
+      <img
+        src={src}
+        alt=""
+        className="lib-row-icon"
+        onError={() => setBroken(true)}
+      />
+    );
+  }
+  return (
+    <span className="lib-row-icon lib-row-icon-fallback" aria-hidden>
+      {app.name.slice(0, 1).toUpperCase()}
+    </span>
+  );
+}
+
+function DetailIcon({ name, iconPath }: { name: string; iconPath?: string }) {
+  const [broken, setBroken] = useState(false);
+  const src = useMemo(() => appIconSrc(iconPath), [iconPath]);
+  if (src && !broken) {
+    return (
+      <img
+        src={src}
+        alt=""
+        className="lib-detail-icon"
+        onError={() => setBroken(true)}
+      />
+    );
+  }
+  return (
+    <span className="lib-detail-icon lib-detail-icon-fallback" aria-hidden>
+      {name.slice(0, 1).toUpperCase()}
+    </span>
+  );
+}
+
 function formatBytes(n: number): string {
   if (n < 1024) return `${n} B`;
   const u = ["KB", "MB", "GB", "TB"];
@@ -35,7 +86,9 @@ function formatBytes(n: number): string {
 export default function LibraryView() {
   const [store, setStore] = useState<AppStore | null>(null);
   const [scanned, setScanned] = useState<ScannedApp[]>([]);
+  const [scannedAt, setScannedAt] = useState<number | null>(null);
   const [scanning, setScanning] = useState(false);
+  const [catalogBootstrapping, setCatalogBootstrapping] = useState(true);
   const [query, setQuery] = useState("");
   const [groupId, setGroupId] = useState<string | "all">("all");
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
@@ -57,6 +110,38 @@ export default function LibraryView() {
   useEffect(() => {
     void invoke<AppStore>("load_store").then(setStore);
   }, []);
+
+  const applyCatalog = useCallback((dto: AppCatalogDto) => {
+    setScanned(dto.apps);
+    setScannedAt(dto.scannedAt);
+  }, []);
+
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        const dto = await invoke<AppCatalogDto>("load_app_catalog");
+        if (!alive) return;
+        applyCatalog(dto);
+        if (dto.apps.length === 0) {
+          setScanning(true);
+          const fresh = await invoke<AppCatalogDto>("refresh_app_catalog");
+          if (!alive) return;
+          applyCatalog(fresh);
+        }
+      } catch (e) {
+        console.error(String(e));
+      } finally {
+        if (alive) {
+          setScanning(false);
+          setCatalogBootstrapping(false);
+        }
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [applyCatalog]);
 
   useEffect(() => {
     if (!selectedPath) {
@@ -87,8 +172,8 @@ export default function LibraryView() {
 
   const runScan = () => {
     setScanning(true);
-    void invoke<ScannedApp[]>("scan_start_menu_apps")
-      .then(setScanned)
+    void invoke<AppCatalogDto>("refresh_app_catalog")
+      .then(applyCatalog)
       .catch((e) => console.error(String(e)))
       .finally(() => setScanning(false));
   };
@@ -164,10 +249,17 @@ export default function LibraryView() {
   return (
     <div className="lib-root">
       <header className="lib-header">
-        <h1>全部应用</h1>
+        <div className="lib-header-titles">
+          <h1>全部应用</h1>
+          {scannedAt != null && (
+            <p className="lib-catalog-meta">
+              已缓存 · 上次扫描 {formatScannedAt(scannedAt)}
+            </p>
+          )}
+        </div>
         <div className="lib-actions">
           <button type="button" onClick={runScan} disabled={scanning}>
-            {scanning ? "扫描中…" : "扫描开始菜单"}
+            {scanning ? "扫描中…" : "重新扫描开始菜单"}
           </button>
           <button type="button" onClick={pickFile}>
             手动添加可执行文件
@@ -227,15 +319,20 @@ export default function LibraryView() {
                   }
                   onClick={() => setSelectedPath(a.path)}
                 >
-                  <span className="lib-row-name">{a.name}</span>
-                  <span className="lib-row-path">{a.path}</span>
+                  <LibRowIcon app={a} />
+                  <span className="lib-row-text">
+                    <span className="lib-row-name">{a.name}</span>
+                    <span className="lib-row-path">{a.path}</span>
+                  </span>
                 </button>
               </li>
             ))}
           </ul>
           {filtered.length === 0 && (
             <p className="lib-empty">
-              没有匹配的应用。请先「扫描开始菜单」或缩小筛选范围。
+              {catalogBootstrapping || scanning
+                ? "正在准备应用列表…"
+                : "没有匹配的应用。可尝试「重新扫描」或缩小筛选范围。"}
             </p>
           )}
         </main>
@@ -245,6 +342,15 @@ export default function LibraryView() {
           {!selectedPath && <p className="lib-muted">在左侧选择一个应用。</p>}
           {selectedPath && detail && (
             <>
+              <DetailIcon
+                name={detail.name}
+                iconPath={
+                  scanned.find(
+                    (x) =>
+                      x.path.toLowerCase() === selectedPath.toLowerCase(),
+                  )?.iconPath
+                }
+              />
               <dl className="lib-dl">
                 <dt>名称</dt>
                 <dd>{detail.name}</dd>
