@@ -1,9 +1,14 @@
 .dock-shell {
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 100vw;
   min-height: 100vh;
+  height: 100vh;
   display: flex;
   align-items: center;
   justify-content: center;
   padding: 6px;
+  overflow: hidden;
   /* 窗口透明时由系统透出桌面，此处不再铺实色底 */
   background: transparent;
 }
@@ -18,6 +23,8 @@
   display: flex;
   flex-direction: row;
   align-items: stretch;
+  max-width: 100%;
+  min-width: 0;
   border-radius: 18px;
   padding: 8px 0;
   background: rgba(28, 28, 32, 0.94);
@@ -51,10 +58,21 @@
   flex-direction: row;
   align-items: center;
   gap: 8px;
-  padding: 0 6px;
+  /* 为磁贴「移除」角标（top: -4px）留出空间，避免 overflow 裁切 */
+  padding: 10px 6px 8px 6px;
   flex: 1;
   min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  overscroll-behavior-x: contain;
   -webkit-app-region: no-drag;
+  /* 避免整窗出现粗滚动条；仍可用滚轮/触控板横向滑动 */
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.dock-items::-webkit-scrollbar {
+  display: none;
 }
 
 .dock-tile {

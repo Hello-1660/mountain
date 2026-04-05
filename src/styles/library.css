@@ -272,6 +272,34 @@
   color: #fff;
 }
 
+.lib-row-context-menu {
+  min-width: 10.5rem;
+  padding: 0.25rem;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: #25262c;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.55);
+}
+
+.lib-row-context-menu-item {
+  display: block;
+  width: 100%;
+  margin: 0;
+  padding: 0.45rem 0.65rem;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: #e8e9ed;
+  font: inherit;
+  font-size: 0.88rem;
+  text-align: left;
+  cursor: pointer;
+}
+
+.lib-row-context-menu-item:hover {
+  background: rgba(100, 149, 237, 0.2);
+}
+
 .lib-group-name-truncate {
   overflow: hidden;
   text-overflow: ellipsis;

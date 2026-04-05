@@ -15,7 +15,7 @@
         "label": "dock",
         "title": "便捷启动",
         "width": 560,
-        "height": 80,
+        "height": 102,
         "resizable": false,
         "maximizable": false,
         "minimizable": true,
