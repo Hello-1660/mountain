@@ -62,6 +62,7 @@ async function openLibrary() {
 export default function DockBar() {
   const [store, setStore] = useState<AppStore | null>(null);
   const dragId = useRef<string | null>(null);
+  const dockItemsRef = useRef<HTMLDivElement>(null);
 
   const debouncedSave = useRef(
     debounce((s: AppStore) => {
@@ -127,6 +128,21 @@ export default function DockBar() {
   useEffect(() => {
     void invoke<AppStore>("load_store").then(setStore);
   }, []);
+
+  /** 图标区横向溢出时，用竖向滚轮也能左右滑动（避免隐藏滚动条后无法操作） */
+  useEffect(() => {
+    const el = dockItemsRef.current;
+    if (!el) return;
+    const onWheel = (e: WheelEvent) => {
+      if (el.scrollWidth <= el.clientWidth) return;
+      const dx = e.deltaX !== 0 ? e.deltaX : e.deltaY;
+      if (Math.abs(dx) < 0.5) return;
+      el.scrollLeft += dx;
+      e.preventDefault();
+    };
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+  }, [store?.dock.length]);
 
   useEffect(() => {
     let unlisten: (() => void) | undefined;
@@ -195,7 +211,7 @@ export default function DockBar() {
           data-tauri-drag-region
           aria-hidden
         />
-        <div className="dock-items">
+        <div ref={dockItemsRef} className="dock-items">
           {store.dock.map((item) => (
             <div
               key={item.id}

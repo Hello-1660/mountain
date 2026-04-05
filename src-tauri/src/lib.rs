@@ -7,6 +7,14 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
+
+/// 避免从 GUI 主进程拉起 PowerShell 时短暂弹出黑色控制台窗口。
+#[cfg(target_os = "windows")]
+fn hide_console_for_child(cmd: &mut Command) {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x08000000;
+    cmd.creation_flags(CREATE_NO_WINDOW);
+}
 use tauri::menu::MenuBuilder;
 use tauri::tray::TrayIconBuilder;
 use tauri::{Emitter, Manager, RunEvent};
@@ -208,7 +216,9 @@ try {{
 "#
     );
     // 不要用 -NonInteractive：在部分环境下会妨碍 System.Drawing / GDI+ 初始化，导致永远提不出图标
-    let output = Command::new("powershell")
+    let mut ps = Command::new("powershell");
+    hide_console_for_child(&mut ps);
+    let output = ps
         .args([
             "-NoProfile",
             "-ExecutionPolicy",
@@ -355,8 +365,17 @@ foreach ($root in $roots) {
 }
 if ($results.Count -eq 0) { '[]' } else { ($results | ConvertTo-Json -Depth 4 -Compress) }
 "#;
-        let output = Command::new("powershell")
-            .args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script])
+        let mut ps = Command::new("powershell");
+        hide_console_for_child(&mut ps);
+        let output = ps
+            .args([
+                "-NoProfile",
+                "-NonInteractive",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-Command",
+                script,
+            ])
             .output()
             .map_err(|e| format!("扫描失败: {e}"))?;
         if !output.status.success() {

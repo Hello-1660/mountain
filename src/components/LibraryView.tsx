@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { disable, enable, isEnabled } from "@tauri-apps/plugin-autostart";
@@ -108,6 +109,12 @@ export default function LibraryView() {
   });
   const [updateCheck, setUpdateCheck] = useState<UpdateCheckDto | null>(null);
   const [updateBusy, setUpdateBusy] = useState(false);
+  const [rowContextMenu, setRowContextMenu] = useState<{
+    path: string;
+    x: number;
+    y: number;
+  } | null>(null);
+  const rowContextMenuRef = useRef<HTMLDivElement>(null);
   const debouncedSave = useRef(
     debounce((s: AppStore) => {
       void invoke("save_store", { store: s }).catch((e) =>
@@ -403,6 +410,67 @@ export default function LibraryView() {
     removeFromDockByPath(selectedPath);
   };
 
+  const isCustomGroupView = useMemo(() => {
+    if (
+      groupId === "all" ||
+      groupId === DOCK_GROUP_ID ||
+      groupId === RECENT_GROUP_ID ||
+      groupId === FREQUENT_GROUP_ID
+    ) {
+      return false;
+    }
+    return store?.groups.some((g) => g.id === groupId) ?? false;
+  }, [groupId, store]);
+
+  useEffect(() => {
+    setRowContextMenu(null);
+  }, [groupId]);
+
+  useEffect(() => {
+    if (!rowContextMenu) return;
+    const onDown = (e: MouseEvent) => {
+      if (rowContextMenuRef.current?.contains(e.target as Node)) return;
+      setRowContextMenu(null);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setRowContextMenu(null);
+    };
+    const t = window.setTimeout(() => {
+      window.addEventListener("mousedown", onDown, true);
+    }, 0);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.clearTimeout(t);
+      window.removeEventListener("mousedown", onDown, true);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [rowContextMenu]);
+
+  const removeFromCurrentGroup = (path: string) => {
+    if (!store) return;
+    if (
+      groupId === "all" ||
+      groupId === DOCK_GROUP_ID ||
+      groupId === RECENT_GROUP_ID ||
+      groupId === FREQUENT_GROUP_ID
+    ) {
+      return;
+    }
+    const gid = groupId;
+    const next = store.groups.map((g) =>
+      g.id !== gid
+        ? g
+        : {
+            ...g,
+            paths: g.paths.filter(
+              (p) => p.toLowerCase() !== path.toLowerCase(),
+            ),
+          },
+    );
+    persist({ ...store, groups: next });
+    setRowContextMenu(null);
+  };
+
   const deleteGroup = (gid: string) => {
     if (
       !store ||
@@ -461,11 +529,29 @@ export default function LibraryView() {
     }
   }, []);
 
+  const contextMenuPos = useMemo(() => {
+    if (!rowContextMenu) return null;
+    const pad = 6;
+    const mw = 176;
+    const mh = 40;
+    return {
+      left: Math.max(
+        pad,
+        Math.min(rowContextMenu.x, window.innerWidth - mw - pad),
+      ),
+      top: Math.max(
+        pad,
+        Math.min(rowContextMenu.y, window.innerHeight - mh - pad),
+      ),
+    };
+  }, [rowContextMenu]);
+
   if (!store) {
     return <div className="lib-root lib-loading">加载中…</div>;
   }
 
   return (
+    <>
     <div className="lib-root">
       <header className="lib-header">
         <div className="lib-header-titles">
@@ -738,6 +824,18 @@ export default function LibraryView() {
                         className={
                           active ? "lib-row-wrap active" : "lib-row-wrap"
                         }
+                        onContextMenu={
+                          isCustomGroupView
+                            ? (e) => {
+                                e.preventDefault();
+                                setRowContextMenu({
+                                  path: a.path,
+                                  x: e.clientX,
+                                  y: e.clientY,
+                                });
+                              }
+                            : undefined
+                        }
                       >
                         <button
                           type="button"
@@ -832,5 +930,31 @@ export default function LibraryView() {
         </section>
       </div>
     </div>
+    {rowContextMenu &&
+      contextMenuPos &&
+      createPortal(
+        <div
+          ref={rowContextMenuRef}
+          className="lib-row-context-menu"
+          style={{
+            position: "fixed",
+            left: contextMenuPos.left,
+            top: contextMenuPos.top,
+            zIndex: 100000,
+          }}
+          role="menu"
+        >
+          <button
+            type="button"
+            className="lib-row-context-menu-item"
+            role="menuitem"
+            onClick={() => removeFromCurrentGroup(rowContextMenu.path)}
+          >
+            移出分组
+          </button>
+        </div>,
+        document.body,
+      )}
+    </>
   );
 }
