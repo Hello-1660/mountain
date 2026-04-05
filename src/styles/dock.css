@@ -1,0 +1,94 @@
+.dock-shell {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 6px;
+  background: transparent;
+}
+
+.dock-loading {
+  color: rgba(255, 255, 255, 0.35);
+  font-size: 1.2rem;
+  letter-spacing: 0.2em;
+}
+
+.dock-strip {
+  border-radius: 18px;
+  padding: 8px 10px;
+  background: rgba(28, 28, 32, 0.94);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.45);
+  -webkit-app-region: drag;
+}
+
+.dock-items {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  -webkit-app-region: no-drag;
+}
+
+.dock-tile {
+  position: relative;
+  width: 48px;
+  height: 48px;
+  border: none;
+  border-radius: 12px;
+  background: linear-gradient(145deg, #3a3d46, #2c2e34);
+  color: #f2f2f4;
+  cursor: pointer;
+  flex-shrink: 0;
+  display: grid;
+  place-items: center;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  transition: transform 0.12s ease, background 0.12s ease;
+}
+
+.dock-tile:hover {
+  transform: translateY(-1px);
+  background: linear-gradient(145deg, #4a4e5a, #353840);
+}
+
+.dock-tile:active {
+  transform: translateY(0);
+}
+
+.dock-tile-initial {
+  font-weight: 600;
+  font-size: 1.05rem;
+}
+
+.dock-tile-remove {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #c94c4c;
+  color: #fff;
+  font-size: 12px;
+  line-height: 16px;
+  text-align: center;
+  opacity: 0;
+  transition: opacity 0.12s ease;
+  cursor: pointer;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.35);
+}
+
+.dock-tile:hover .dock-tile-remove {
+  opacity: 1;
+}
+
+.dock-tile-more {
+  background: linear-gradient(145deg, #2f4a6f, #243652);
+  font-size: 1.35rem;
+  line-height: 1;
+  letter-spacing: 0;
+}
+
+.dock-tile-more:hover {
+  background: linear-gradient(145deg, #3a5c8a, #2c4266);
+}
