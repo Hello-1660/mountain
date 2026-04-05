@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke, isTauri } from "@tauri-apps/api/core";
-import { appIconSrc } from "../appIconSrc";
+import CachedAppIcon from "./CachedAppIcon";
 import type { AppStore, DockItem } from "../types";
 import "../styles/dock.css";
 
@@ -11,21 +11,17 @@ function DockTileFace({
   title: string;
   iconPath?: string;
 }) {
-  const [broken, setBroken] = useState(false);
-  const src = useMemo(() => appIconSrc(iconPath), [iconPath]);
-  if (src && !broken) {
-    return (
-      <img
-        src={src}
-        alt=""
-        className="dock-tile-img"
-        draggable={false}
-        onError={() => setBroken(true)}
-      />
-    );
-  }
   return (
-    <span className="dock-tile-initial">{title.slice(0, 1).toUpperCase()}</span>
+    <CachedAppIcon
+      iconPath={iconPath}
+      className="dock-tile-img"
+      draggable={false}
+      fallback={
+        <span className="dock-tile-initial">
+          {title.slice(0, 1).toUpperCase()}
+        </span>
+      }
+    />
   );
 }
 

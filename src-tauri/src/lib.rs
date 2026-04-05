@@ -121,10 +121,10 @@ try {{
 }} catch {{ exit 3 }}
 "#
     );
+    // 不要用 -NonInteractive：在部分环境下会妨碍 System.Drawing / GDI+ 初始化，导致永远提不出图标
     let output = Command::new("powershell")
         .args([
             "-NoProfile",
-            "-NonInteractive",
             "-ExecutionPolicy",
             "Bypass",
             "-Command",
@@ -172,11 +172,40 @@ fn ensure_icon_for_exe(app: &tauri::AppHandle, exe_path: &str) -> Result<Option<
             let _ = extract_exe_icon_png(p, &out);
         }
         if out.exists() && out.metadata().map(|m| m.len() > 0).unwrap_or(false) {
-            Ok(Some(out.to_string_lossy().to_string()))
+            let abs = out
+                .canonicalize()
+                .unwrap_or_else(|_| out.clone());
+            Ok(Some(abs.to_string_lossy().to_string()))
         } else {
             Ok(None)
         }
     }
+}
+
+/// 供前端在 `convertFileSrc`（asset 协议）加载失败时回退，避免列表无图。
+#[tauri::command]
+fn read_icon_data_url(app: tauri::AppHandle, path: String) -> Result<Option<String>, String> {
+    let path = path.trim();
+    if path.is_empty() {
+        return Ok(None);
+    }
+    let p = Path::new(path);
+    let icons_root = icons_dir(&app)?;
+    let icons_canon = fs::canonicalize(&icons_root).map_err(|e| e.to_string())?;
+    let target = p
+        .canonicalize()
+        .map_err(|_| "无法读取图标文件".to_string())?;
+    let t = target.to_string_lossy().to_lowercase();
+    let root = icons_canon.to_string_lossy().to_lowercase();
+    if !t.starts_with(root.as_str()) {
+        return Err("路径不在图标缓存目录内".into());
+    }
+    let bytes = fs::read(&target).map_err(|e| e.to_string())?;
+    if bytes.is_empty() {
+        return Ok(None);
+    }
+    let b64 = STANDARD.encode(&bytes);
+    Ok(Some(format!("data:image/png;base64,{b64}")))
 }
 
 fn save_catalog(app: &tauri::AppHandle, dto: &AppCatalogDto) -> Result<(), String> {
@@ -441,6 +470,7 @@ pub fn run() {
             launch_app,
             load_app_catalog,
             refresh_app_catalog,
+            read_icon_data_url,
             pick_executable,
             show_library_window,
         ])

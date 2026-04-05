@@ -1,9 +1,11 @@
 .lib-root {
-  min-height: 100%;
+  height: 100%;
+  min-height: 0;
   background: #1a1b1f;
   color: #e8e9ed;
   display: flex;
   flex-direction: column;
+  overflow: hidden;
 }
 
 .lib-loading {
@@ -61,8 +63,14 @@
 
 .lib-body {
   flex: 1;
+  min-height: 0;
   display: grid;
   grid-template-columns: 200px 1fr 280px;
+  grid-template-rows: minmax(0, 1fr);
+  align-content: stretch;
+}
+
+.lib-body > * {
   min-height: 0;
 }
 
@@ -71,7 +79,26 @@
   padding: 0.75rem;
   display: flex;
   flex-direction: column;
+  min-height: 0;
+  gap: 0;
+}
+
+.lib-sidebar-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
   gap: 0.35rem;
+  padding-bottom: 0.35rem;
+}
+
+.lib-sidebar-footer {
+  flex-shrink: 0;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  padding-top: 0.65rem;
+  margin-top: 0.25rem;
+  background: #1a1b1f;
 }
 
 .lib-side-title {
@@ -108,12 +135,133 @@
   opacity: 0.55;
 }
 
+.lib-group-row {
+  display: flex;
+  align-items: stretch;
+  gap: 0.2rem;
+  border-radius: 8px;
+}
+
+.lib-group-row.active {
+  background: rgba(100, 149, 237, 0.2);
+}
+
+.lib-group-row.active .lib-group-main {
+  color: #b8ccff;
+}
+
+.lib-group-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  text-align: left;
+  border: none;
+  border-radius: 8px;
+  padding: 0.5rem 0.65rem;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+.lib-group-main:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.lib-group-row.active .lib-group-main:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.lib-group-actions {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 0.15rem;
+  padding-right: 0.15rem;
+}
+
+.lib-group-action {
+  width: 26px;
+  height: 22px;
+  border: none;
+  border-radius: 4px;
+  padding: 0;
+  font-size: 0.75rem;
+  line-height: 1;
+  background: rgba(255, 255, 255, 0.06);
+  color: rgba(255, 255, 255, 0.65);
+  cursor: pointer;
+}
+
+.lib-group-action:hover {
+  background: rgba(255, 255, 255, 0.12);
+  color: #e8e9ed;
+}
+
+.lib-group-action.danger:hover {
+  background: rgba(201, 76, 76, 0.35);
+  color: #fff;
+}
+
+.lib-group-rename-input {
+  flex: 1;
+  min-width: 0;
+  border-radius: 6px;
+  border: 1px solid rgba(100, 149, 237, 0.45);
+  padding: 0.35rem 0.45rem;
+  background: #121318;
+  color: inherit;
+  font-size: 0.88rem;
+}
+
+.lib-group-rename-actions {
+  display: flex;
+  gap: 0.25rem;
+  align-items: center;
+}
+
+.lib-group-rename-actions button {
+  border-radius: 4px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  padding: 0.25rem 0.45rem;
+  font-size: 0.72rem;
+  background: #2a2c33;
+  color: inherit;
+  cursor: pointer;
+}
+
+.lib-row-remove {
+  flex-shrink: 0;
+  align-self: center;
+  width: 32px;
+  height: 32px;
+  margin-right: 0.35rem;
+  border: none;
+  border-radius: 6px;
+  background: rgba(201, 76, 76, 0.25);
+  color: #f0a8a0;
+  cursor: pointer;
+  font-size: 1.1rem;
+  line-height: 1;
+}
+
+.lib-row-remove:hover {
+  background: rgba(201, 76, 76, 0.45);
+  color: #fff;
+}
+
+.lib-group-name-truncate {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 7.5rem;
+}
+
 .lib-new-group {
-  margin-top: auto;
   display: flex;
   flex-direction: column;
   gap: 0.35rem;
-  padding-top: 0.75rem;
 }
 
 .lib-new-group input {
@@ -136,11 +284,14 @@
   display: flex;
   flex-direction: column;
   min-width: 0;
+  min-height: 0;
   padding: 0.75rem 1rem;
   gap: 0.65rem;
+  overflow: hidden;
 }
 
 .lib-search {
+  flex-shrink: 0;
   border-radius: 10px;
   border: 1px solid rgba(255, 255, 255, 0.12);
   padding: 0.55rem 0.75rem;
@@ -148,29 +299,66 @@
   color: inherit;
 }
 
+/* 中间列表：占满剩余高度，只在内部滚动，不把整窗撑高 */
+.lib-list-panel {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  background: rgba(0, 0, 0, 0.2);
+  overflow: hidden;
+}
+
 .lib-list {
   list-style: none;
   margin: 0;
   padding: 0;
-  overflow: auto;
   flex: 1;
-  border-radius: 10px;
-  border: 1px solid rgba(255, 255, 255, 0.06);
-  background: rgba(0, 0, 0, 0.2);
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.lib-empty-wrap {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+}
+
+.lib-row-wrap {
+  display: flex;
+  flex-direction: row;
+  align-items: stretch;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+}
+
+.lib-row-wrap:last-child {
+  border-bottom: none;
+}
+
+.lib-row-wrap.active .lib-row {
+  background: rgba(100, 149, 237, 0.15);
 }
 
 .lib-row {
-  width: 100%;
+  flex: 1;
+  min-width: 0;
   display: flex;
   flex-direction: row;
   align-items: center;
   gap: 0.65rem;
   padding: 0.45rem 0.75rem;
   border: none;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
   background: transparent;
   color: inherit;
   text-align: left;
+  cursor: pointer;
 }
 
 .lib-row-icon {
@@ -198,16 +386,12 @@
   min-width: 0;
 }
 
-.lib-row:last-child {
-  border-bottom: none;
-}
-
 .lib-row:hover {
   background: rgba(255, 255, 255, 0.04);
 }
 
-.lib-row.active {
-  background: rgba(100, 149, 237, 0.15);
+.lib-row-wrap.active .lib-row:hover {
+  background: rgba(100, 149, 237, 0.2);
 }
 
 .lib-row-name {
@@ -221,15 +405,19 @@
 }
 
 .lib-empty {
-  margin: 1rem 0;
+  margin: 0;
   color: rgba(255, 255, 255, 0.45);
   font-size: 0.9rem;
+  text-align: center;
 }
 
 .lib-detail {
   border-left: 1px solid rgba(255, 255, 255, 0.06);
   padding: 0.85rem 1rem;
-  overflow: auto;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
 }
 
 .lib-detail h2 {
@@ -332,7 +520,12 @@
   .lib-sidebar {
     border-right: none;
     border-bottom: 1px solid rgba(255, 255, 255, 0.06);
-    flex-flow: row wrap;
+    flex-direction: column;
+    max-height: min(42vh, 320px);
+  }
+
+  .lib-sidebar-scroll {
+    max-height: min(28vh, 220px);
   }
 
   .lib-detail {

@@ -1,3 +1,6 @@
+/** 内置「便捷启动」分组 id，不出现在 `groups` 数组中，与 `dock` 同步 */
+export const DOCK_GROUP_ID = "mountain-quick-launch";
+
 export interface DockItem {
   id: string;
   path: string;
