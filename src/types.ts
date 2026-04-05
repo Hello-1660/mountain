@@ -19,6 +19,14 @@ export interface AppStore {
   groups: AppGroup[];
 }
 
+/** 库界面用：去掉误写入的「便捷启动」伪分组，与 `dock` 一致 */
+export function normalizeLibraryStore(s: AppStore): AppStore {
+  return {
+    ...s,
+    groups: (s.groups ?? []).filter((g) => g.id !== DOCK_GROUP_ID),
+  };
+}
+
 export interface ScannedApp {
   name: string;
   path: string;

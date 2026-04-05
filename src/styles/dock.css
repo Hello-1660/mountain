@@ -4,8 +4,8 @@
   align-items: center;
   justify-content: center;
   padding: 6px;
-  /* 与无边框非透明窗口背景一致，避免误以为是「点了没反应」其实是点到桌面 */
-  background: #141416;
+  /* 窗口透明时由系统透出桌面，此处不再铺实色底 */
+  background: transparent;
 }
 
 .dock-loading {

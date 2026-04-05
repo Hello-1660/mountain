@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import CachedAppIcon from "./CachedAppIcon";
 import {
   DOCK_GROUP_ID,
+  normalizeLibraryStore,
   type AppCatalogDto,
   type AppGroup,
   type AppStore,
@@ -100,9 +102,20 @@ export default function LibraryView() {
 
   useEffect(() => {
     void invoke<AppStore>("load_store").then((s) => {
-      const groups = (s.groups ?? []).filter((g) => g.id !== DOCK_GROUP_ID);
-      setStore({ ...s, groups });
+      setStore(normalizeLibraryStore(s));
     });
+  }, []);
+
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    void listen<AppStore>("store-updated", (e) => {
+      setStore(normalizeLibraryStore(e.payload));
+    }).then((fn) => {
+      unlisten = fn;
+    });
+    return () => {
+      unlisten?.();
+    };
   }, []);
 
   const applyCatalog = useCallback((dto: AppCatalogDto) => {

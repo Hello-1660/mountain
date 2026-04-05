@@ -20,7 +20,7 @@
         "maximizable": false,
         "minimizable": true,
         "decorations": false,
-        "transparent": false,
+        "transparent": true,
         "shadow": false,
         "skipTaskbar": true,
         "center": true

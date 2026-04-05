@@ -1,5 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke, isTauri } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
+import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
+import { saveWindowState } from "@tauri-apps/plugin-window-state";
 import CachedAppIcon from "./CachedAppIcon";
 import type { AppStore, DockItem } from "../types";
 import "../styles/dock.css";
@@ -74,7 +77,67 @@ export default function DockBar() {
   }, []);
 
   useEffect(() => {
+    const html = document.documentElement;
+    const body = document.body;
+    const root = document.getElementById("root");
+    const prevHtml = html.style.background;
+    const prevBody = body.style.background;
+    const prevRoot = root?.style.background ?? "";
+    html.style.background = "transparent";
+    body.style.background = "transparent";
+    if (root) root.style.background = "transparent";
+    return () => {
+      html.style.background = prevHtml;
+      body.style.background = prevBody;
+      if (root) root.style.background = prevRoot;
+    };
+  }, []);
+
+  /** 拖动便捷栏后写入磁盘；仅靠进程退出保存时，强退或崩溃会丢位置 */
+  useEffect(() => {
+    if (!isTauri()) return;
+    let cancelled = false;
+    let moveDebounce: ReturnType<typeof setTimeout> | undefined;
+    let unlisten: (() => void) | undefined;
+
+    void (async () => {
+      try {
+        const win = getCurrentWebviewWindow();
+        unlisten = await win.onMoved(() => {
+          if (moveDebounce) clearTimeout(moveDebounce);
+          moveDebounce = setTimeout(() => {
+            void saveWindowState().catch((e) =>
+              console.error(String(e)),
+            );
+          }, 450);
+        });
+      } catch (e) {
+        console.error(String(e));
+      }
+      if (cancelled) unlisten?.();
+    })();
+
+    return () => {
+      cancelled = true;
+      if (moveDebounce) clearTimeout(moveDebounce);
+      unlisten?.();
+    };
+  }, []);
+
+  useEffect(() => {
     void invoke<AppStore>("load_store").then(setStore);
+  }, []);
+
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    void listen<AppStore>("store-updated", (e) => {
+      setStore(e.payload);
+    }).then((fn) => {
+      unlisten = fn;
+    });
+    return () => {
+      unlisten?.();
+    };
   }, []);
 
   const onLaunch = (path: string) => {

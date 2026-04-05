@@ -6,7 +6,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 use uuid::Uuid;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -345,7 +345,9 @@ fn load_store(app: tauri::AppHandle) -> Result<AppStore, String> {
 fn save_store(app: tauri::AppHandle, store: AppStore) -> Result<(), String> {
     let p = store_path(&app)?;
     let raw = serde_json::to_string_pretty(&store).map_err(|e| e.to_string())?;
-    fs::write(p, raw).map_err(|e| e.to_string())
+    fs::write(p, raw).map_err(|e| e.to_string())?;
+    let _ = app.emit("store-updated", store);
+    Ok(())
 }
 
 #[tauri::command]
