@@ -1,12 +1,12 @@
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
-use tauri::{Emitter, Manager};
+use tauri::{Emitter, Manager, RunEvent};
 use uuid::Uuid;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -62,6 +62,49 @@ pub struct FileDetail {
     pub exists: bool,
 }
 
+const GITHUB_LATEST_RELEASE: &str =
+    "https://api.github.com/repos/Hello-1660/mountain/releases/latest";
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct UsageEntry {
+    pub path: String,
+    pub launch_count: u32,
+    pub last_used_ms: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct UsageFile {
+    pub entries: HashMap<String, UsageEntry>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UsageSnapshotDto {
+    pub recent_paths: Vec<String>,
+    pub frequent_paths: Vec<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateCheckDto {
+    pub current_version: String,
+    pub latest_version: Option<String>,
+    pub has_update: bool,
+    pub release_url: Option<String>,
+    pub release_notes: Option<String>,
+    pub fetch_error: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct GithubReleaseJson {
+    tag_name: String,
+    html_url: String,
+    #[serde(default)]
+    body: Option<String>,
+}
+
 fn app_data_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
     fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
@@ -74,6 +117,46 @@ fn store_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
 
 fn catalog_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     Ok(app_data_dir(app)?.join("catalog.json"))
+}
+
+fn usage_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    Ok(app_data_dir(app)?.join("usage.json"))
+}
+
+fn load_usage_file(app: &tauri::AppHandle) -> Result<UsageFile, String> {
+    let p = usage_path(app)?;
+    if !p.exists() {
+        return Ok(UsageFile::default());
+    }
+    let raw = fs::read_to_string(&p).map_err(|e| e.to_string())?;
+    serde_json::from_str(&raw).map_err(|e| e.to_string())
+}
+
+fn save_usage_file(app: &tauri::AppHandle, data: &UsageFile) -> Result<(), String> {
+    let p = usage_path(app)?;
+    let raw = serde_json::to_string_pretty(data).map_err(|e| e.to_string())?;
+    fs::write(p, raw).map_err(|e| e.to_string())
+}
+
+fn record_launch(app: &tauri::AppHandle, path: &str) -> Result<(), String> {
+    let path = path.trim();
+    if path.is_empty() {
+        return Ok(());
+    }
+    let key = path.to_lowercase();
+    let mut file = load_usage_file(app)?;
+    let now = now_unix_ms();
+    let entry = file.entries.entry(key).or_insert(UsageEntry {
+        path: path.to_string(),
+        launch_count: 0,
+        last_used_ms: 0,
+    });
+    entry.path = path.to_string();
+    entry.launch_count = entry.launch_count.saturating_add(1);
+    entry.last_used_ms = now;
+    save_usage_file(app, &file)?;
+    let _ = app.emit("usage-updated", ());
+    Ok(())
 }
 
 fn icons_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
@@ -405,7 +488,7 @@ fn file_detail(path: String) -> Result<FileDetail, String> {
 }
 
 #[tauri::command]
-fn launch_app(path: String) -> Result<(), String> {
+fn launch_app(app: tauri::AppHandle, path: String) -> Result<(), String> {
     let path = path.trim();
     if path.is_empty() {
         return Err("路径为空".into());
@@ -413,7 +496,102 @@ fn launch_app(path: String) -> Result<(), String> {
     Command::new(path)
         .spawn()
         .map_err(|e| format!("启动失败: {e}"))?;
+    if let Err(e) = record_launch(&app, path) {
+        eprintln!("record_launch: {e}");
+    }
     Ok(())
+}
+
+#[tauri::command]
+fn load_usage_snapshot(app: tauri::AppHandle) -> Result<UsageSnapshotDto, String> {
+    let file = load_usage_file(&app)?;
+    let values: Vec<UsageEntry> = file.entries.into_values().collect();
+
+    let mut by_recent = values.clone();
+    by_recent.sort_by_key(|e| std::cmp::Reverse(e.last_used_ms));
+    let recent_paths: Vec<String> = by_recent
+        .into_iter()
+        .take(40)
+        .map(|e| e.path)
+        .collect();
+
+    let mut by_freq = values;
+    by_freq.sort_by(|a, b| {
+        b.launch_count
+            .cmp(&a.launch_count)
+            .then_with(|| b.last_used_ms.cmp(&a.last_used_ms))
+    });
+    let frequent_paths: Vec<String> = by_freq
+        .into_iter()
+        .take(40)
+        .map(|e| e.path)
+        .collect();
+
+    Ok(UsageSnapshotDto {
+        recent_paths,
+        frequent_paths,
+    })
+}
+
+#[tauri::command]
+fn check_github_release() -> Result<UpdateCheckDto, String> {
+    let current = env!("CARGO_PKG_VERSION").to_string();
+    let mut out = UpdateCheckDto {
+        current_version: current.clone(),
+        latest_version: None,
+        has_update: false,
+        release_url: None,
+        release_notes: None,
+        fetch_error: None,
+    };
+
+    let mut resp = match ureq::get(GITHUB_LATEST_RELEASE)
+        .header("User-Agent", "MountainLauncher")
+        .header("Accept", "application/vnd.github+json")
+        .call()
+    {
+        Ok(r) => r,
+        Err(e) => {
+            out.fetch_error = Some(e.to_string());
+            return Ok(out);
+        }
+    };
+
+    if !resp.status().is_success() {
+        out.fetch_error = Some(format!("GitHub 返回 HTTP {}", resp.status()));
+        return Ok(out);
+    }
+
+    let body = match resp.body_mut().read_to_string() {
+        Ok(b) => b,
+        Err(e) => {
+            out.fetch_error = Some(e.to_string());
+            return Ok(out);
+        }
+    };
+
+    let release: GithubReleaseJson = match serde_json::from_str(&body) {
+        Ok(r) => r,
+        Err(e) => {
+            out.fetch_error = Some(format!("解析 releases JSON 失败: {e}"));
+            return Ok(out);
+        }
+    };
+
+    let tag = release.tag_name.trim().trim_start_matches('v').to_string();
+    out.latest_version = Some(tag.clone());
+    out.release_url = Some(release.html_url);
+    out.release_notes = release.body;
+
+    out.has_update = match (
+        semver::Version::parse(&tag),
+        semver::Version::parse(env!("CARGO_PKG_VERSION")),
+    ) {
+        (Ok(latest), Ok(cur)) => latest > cur,
+        _ => false,
+    };
+
+    Ok(out)
 }
 
 /// 异步打开库窗口：避免在 Windows/WebView2 上通过同步 command 操作窗口时卡住或无效；
@@ -453,9 +631,13 @@ async fn pick_executable(app: tauri::AppHandle) -> Result<Option<String>, String
     Ok(file.map(|f| f.to_string()))
 }
 
+/// 登录/计划任务自启时传入；仅显示便捷栏，不打开「全部应用」窗口（与 window-state 恢复顺序无关，每帧兜底 hide）
+const AUTOSTART_ARG: &str = "--mountain-autostart";
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let context = tauri::generate_context!();
+    let app = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(
@@ -463,6 +645,31 @@ pub fn run() {
                 .with_filename("window-state.json")
                 .build(),
         )
+        .plugin(
+            tauri_plugin_autostart::Builder::new()
+                .arg(AUTOSTART_ARG)
+                .app_name("Mountain 启动器")
+                .build(),
+        )
+        .plugin({
+            let kb = match tauri_plugin_global_shortcut::Builder::new().with_shortcut("Alt+Shift+M") {
+                Ok(b) => b.with_handler(|app, _shortcut, event| {
+                    use tauri_plugin_global_shortcut::ShortcutState;
+                    if event.state != ShortcutState::Pressed {
+                        return;
+                    }
+                    let h = app.clone();
+                    tauri::async_runtime::spawn(async move {
+                        let _ = show_library_window(h).await;
+                    });
+                }),
+                Err(e) => {
+                    eprintln!("Mountain: 全局快捷键 Alt+Shift+M 未注册：{e}");
+                    tauri_plugin_global_shortcut::Builder::new()
+                }
+            };
+            kb.build()
+        })
         .invoke_handler(tauri::generate_handler![
             load_store,
             save_store,
@@ -475,7 +682,21 @@ pub fn run() {
             read_icon_data_url,
             pick_executable,
             show_library_window,
+            load_usage_snapshot,
+            check_github_release,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(context)
+        .expect("error while building tauri application");
+
+    app.run(|app, event| {
+        if let RunEvent::MainEventsCleared = event {
+            if std::env::args().any(|a| a == AUTOSTART_ARG) {
+                if let Some(lib) = app.get_webview_window("library") {
+                    if lib.is_visible().unwrap_or(false) {
+                        let _ = lib.hide();
+                    }
+                }
+            }
+        }
+    });
 }

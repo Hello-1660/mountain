@@ -1,9 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { disable, enable, isEnabled } from "@tauri-apps/plugin-autostart";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import CachedAppIcon from "./CachedAppIcon";
 import {
   DOCK_GROUP_ID,
+  FREQUENT_GROUP_ID,
+  RECENT_GROUP_ID,
   normalizeLibraryStore,
   type AppCatalogDto,
   type AppGroup,
@@ -11,6 +15,8 @@ import {
   type DockItem,
   type FileDetail,
   type ScannedApp,
+  type UpdateCheckDto,
+  type UsageSnapshot,
 } from "../types";
 import "../styles/library.css";
 
@@ -62,6 +68,12 @@ function DetailIcon({ name, iconPath }: { name: string; iconPath?: string }) {
   );
 }
 
+function fallbackNameFromPath(p: string): string {
+  const s = p.replace(/\\/g, "/");
+  const base = s.split("/").pop() ?? p;
+  return base.replace(/\.(exe|lnk|bat|cmd)$/i, "") || p;
+}
+
 function formatBytes(n: number): string {
   if (n < 1024) return `${n} B`;
   const u = ["KB", "MB", "GB", "TB"];
@@ -87,6 +99,15 @@ export default function LibraryView() {
   const [newGroupName, setNewGroupName] = useState("");
   const [renamingGroupId, setRenamingGroupId] = useState<string | null>(null);
   const [renameDraft, setRenameDraft] = useState("");
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [autostartOn, setAutostartOn] = useState(false);
+  const [autostartLoading, setAutostartLoading] = useState(true);
+  const [usage, setUsage] = useState<UsageSnapshot>({
+    recentPaths: [],
+    frequentPaths: [],
+  });
+  const [updateCheck, setUpdateCheck] = useState<UpdateCheckDto | null>(null);
+  const [updateBusy, setUpdateBusy] = useState(false);
   const debouncedSave = useRef(
     debounce((s: AppStore) => {
       void invoke("save_store", { store: s }).catch((e) =>
@@ -117,6 +138,82 @@ export default function LibraryView() {
       unlisten?.();
     };
   }, []);
+
+  useEffect(() => {
+    if (!isTauri()) {
+      setAutostartLoading(false);
+      return;
+    }
+    let alive = true;
+    void isEnabled()
+      .then((on) => {
+        if (alive) setAutostartOn(on);
+      })
+      .catch(() => {})
+      .finally(() => {
+        if (alive) setAutostartLoading(false);
+      });
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  const handleAutostartToggle = useCallback(async (checked: boolean) => {
+    try {
+      if (checked) await enable();
+      else await disable();
+      setAutostartOn(await isEnabled());
+    } catch (e) {
+      console.error(String(e));
+    }
+  }, []);
+
+  const reloadUsage = useCallback(() => {
+    if (!isTauri()) return;
+    void invoke<UsageSnapshot>("load_usage_snapshot").then(setUsage).catch((e) => {
+      console.error(String(e));
+    });
+  }, []);
+
+  useEffect(() => {
+    reloadUsage();
+  }, [reloadUsage]);
+
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    void listen("usage-updated", () => {
+      reloadUsage();
+    }).then((fn) => {
+      unlisten = fn;
+    });
+    return () => {
+      unlisten?.();
+    };
+  }, [reloadUsage]);
+
+  const resolvePathToApp = useCallback(
+    (path: string): ScannedApp => {
+      const hit = scanned.find(
+        (a) => a.path.toLowerCase() === path.toLowerCase(),
+      );
+      if (hit) return hit;
+      const dockItem = store?.dock.find(
+        (d) => d.path.toLowerCase() === path.toLowerCase(),
+      );
+      if (dockItem) {
+        return {
+          name: dockItem.title,
+          path: dockItem.path,
+          iconPath: dockItem.iconPath,
+        };
+      }
+      return {
+        name: fallbackNameFromPath(path),
+        path,
+      };
+    },
+    [scanned, store],
+  );
 
   const applyCatalog = useCallback((dto: AppCatalogDto) => {
     setScanned(dto.apps);
@@ -178,7 +275,11 @@ export default function LibraryView() {
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
     let list: ScannedApp[];
-    if (groupId === DOCK_GROUP_ID && store) {
+    if (groupId === RECENT_GROUP_ID) {
+      list = usage.recentPaths.map((p) => resolvePathToApp(p));
+    } else if (groupId === FREQUENT_GROUP_ID) {
+      list = usage.frequentPaths.map((p) => resolvePathToApp(p));
+    } else if (groupId === DOCK_GROUP_ID && store) {
       list = dockAppsList;
     } else if (groupId !== "all" && store) {
       const g = store.groups.find((x) => x.id === groupId);
@@ -196,7 +297,16 @@ export default function LibraryView() {
       (a) =>
         a.name.toLowerCase().includes(q) || a.path.toLowerCase().includes(q),
     );
-  }, [scanned, query, groupId, store, dockAppsList]);
+  }, [
+    scanned,
+    query,
+    groupId,
+    store,
+    dockAppsList,
+    usage.recentPaths,
+    usage.frequentPaths,
+    resolvePathToApp,
+  ]);
 
   const runScan = () => {
     setScanning(true);
@@ -294,7 +404,13 @@ export default function LibraryView() {
   };
 
   const deleteGroup = (gid: string) => {
-    if (!store || gid === DOCK_GROUP_ID) return;
+    if (
+      !store ||
+      gid === DOCK_GROUP_ID ||
+      gid === RECENT_GROUP_ID ||
+      gid === FREQUENT_GROUP_ID
+    )
+      return;
     if (!window.confirm("确定删除该分组？组内应用不会从便捷栏移除。")) return;
     const next = {
       ...store,
@@ -324,6 +440,27 @@ export default function LibraryView() {
     store?.dock.some((d) => d.path.toLowerCase() === path.toLowerCase()) ??
     false;
 
+  const handleCheckUpdate = useCallback(async () => {
+    if (!isTauri()) return;
+    setUpdateBusy(true);
+    setUpdateCheck(null);
+    try {
+      const r = await invoke<UpdateCheckDto>("check_github_release");
+      setUpdateCheck(r);
+    } catch (e) {
+      setUpdateCheck({
+        currentVersion: "",
+        latestVersion: null,
+        hasUpdate: false,
+        releaseUrl: null,
+        releaseNotes: null,
+        fetchError: String(e),
+      });
+    } finally {
+      setUpdateBusy(false);
+    }
+  }, []);
+
   if (!store) {
     return <div className="lib-root lib-loading">加载中…</div>;
   }
@@ -346,8 +483,88 @@ export default function LibraryView() {
           <button type="button" onClick={pickFile}>
             手动添加可执行文件
           </button>
+          <button
+            type="button"
+            onClick={() => setSettingsOpen((o) => !o)}
+            aria-expanded={settingsOpen}
+          >
+            设置
+          </button>
         </div>
       </header>
+
+      {settingsOpen && (
+        <div className="lib-settings-panel" role="region" aria-label="设置">
+          <div className="lib-settings-row">
+            <label className="lib-settings-label">
+              <input
+                type="checkbox"
+                checked={autostartOn}
+                disabled={autostartLoading || !isTauri()}
+                onChange={(e) => void handleAutostartToggle(e.target.checked)}
+              />
+              <span>开机自动启动便捷启动栏</span>
+            </label>
+            <p className="lib-settings-hint">
+              开启后登录系统只会显示桌面上的便捷栏，不会自动打开本「全部应用」窗口。
+            </p>
+            {!isTauri() && (
+              <p className="lib-settings-hint">此选项仅在桌面版（npm run tauri dev）中可用。</p>
+            )}
+            <p className="lib-settings-hint lib-settings-divider">
+              全局快捷键 <kbd className="lib-kbd">Alt</kbd>
+              {" + "}
+              <kbd className="lib-kbd">Shift</kbd>
+              {" + "}
+              <kbd className="lib-kbd">M</kbd>
+              ：随时打开本「全部应用」窗口（与便捷栏 ⋯ 相同）。
+            </p>
+            <div className="lib-settings-update">
+              <button
+                type="button"
+                disabled={!isTauri() || updateBusy}
+                onClick={() => void handleCheckUpdate()}
+              >
+                {updateBusy ? "检查中…" : "检查更新"}
+              </button>
+              {updateCheck && (
+                <div className="lib-settings-update-result">
+                  {updateCheck.fetchError && (
+                    <p className="lib-settings-hint lib-warn-text">
+                      {updateCheck.fetchError}
+                    </p>
+                  )}
+                  {!updateCheck.fetchError && (
+                    <>
+                      <p className="lib-settings-hint">
+                        当前版本 {updateCheck.currentVersion}
+                        {updateCheck.latestVersion != null &&
+                          ` · 最新 ${updateCheck.latestVersion}`}
+                      </p>
+                      {updateCheck.hasUpdate && updateCheck.releaseUrl && (
+                        <p className="lib-settings-hint">
+                          <button
+                            type="button"
+                            className="lib-link-button"
+                            onClick={() =>
+                              void openUrl(updateCheck.releaseUrl!)
+                            }
+                          >
+                            前往 GitHub 下载
+                          </button>
+                        </p>
+                      )}
+                      {!updateCheck.hasUpdate && updateCheck.latestVersion && (
+                        <p className="lib-settings-hint">已是最新。</p>
+                      )}
+                    </>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       <div className="lib-body">
         <aside className="lib-sidebar">
@@ -370,6 +587,30 @@ export default function LibraryView() {
             >
               <span>便捷启动</span>
               <span className="lib-group-count">{store.dock.length}</span>
+            </button>
+            <button
+              type="button"
+              className={
+                groupId === RECENT_GROUP_ID ? "lib-group active" : "lib-group"
+              }
+              onClick={() => setGroupId(RECENT_GROUP_ID)}
+              title="按最后一次从本启动器打开的时间排序"
+            >
+              <span>最近使用</span>
+              <span className="lib-group-count">{usage.recentPaths.length}</span>
+            </button>
+            <button
+              type="button"
+              className={
+                groupId === FREQUENT_GROUP_ID ? "lib-group active" : "lib-group"
+              }
+              onClick={() => setGroupId(FREQUENT_GROUP_ID)}
+              title="按从本启动器累计打开次数排序"
+            >
+              <span>常用</span>
+              <span className="lib-group-count">
+                {usage.frequentPaths.length}
+              </span>
             </button>
             {store.groups.map((g) =>
               renamingGroupId === g.id ? (
@@ -472,7 +713,11 @@ export default function LibraryView() {
                     ? "正在准备应用列表…"
                     : groupId === DOCK_GROUP_ID
                       ? "便捷栏暂无应用。切换到「全部」选择应用并固定，或使用顶部「手动添加可执行文件」。"
-                      : "没有匹配的应用。可尝试「重新扫描」或缩小筛选范围。"}
+                      : groupId === RECENT_GROUP_ID
+                        ? "暂无最近使用记录。从本启动器或便捷栏启动应用后会出现在这里。"
+                        : groupId === FREQUENT_GROUP_ID
+                          ? "暂无常用记录。多次从本启动器启动同一应用后会出现在这里。"
+                          : "没有匹配的应用。可尝试「重新扫描」或缩小筛选范围。"}
                 </p>
               </div>
             ) : (
@@ -524,12 +769,7 @@ export default function LibraryView() {
             <>
               <DetailIcon
                 name={detail.name}
-                iconPath={
-                  scanned.find(
-                    (x) =>
-                      x.path.toLowerCase() === selectedPath.toLowerCase(),
-                  )?.iconPath
-                }
+                iconPath={resolvePathToApp(selectedPath).iconPath}
               />
               <dl className="lib-dl">
                 <dt>名称</dt>

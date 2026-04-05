@@ -1,6 +1,12 @@
 /** 内置「便捷启动」分组 id，不出现在 `groups` 数组中，与 `dock` 同步 */
 export const DOCK_GROUP_ID = "mountain-quick-launch";
 
+/** 按最近启动时间排序的虚拟分组 */
+export const RECENT_GROUP_ID = "mountain-recent";
+
+/** 按启动次数排序的虚拟分组 */
+export const FREQUENT_GROUP_ID = "mountain-frequent";
+
 export interface DockItem {
   id: string;
   path: string;
@@ -44,4 +50,18 @@ export interface FileDetail {
   name: string;
   sizeBytes: number;
   exists: boolean;
+}
+
+export interface UsageSnapshot {
+  recentPaths: string[];
+  frequentPaths: string[];
+}
+
+export interface UpdateCheckDto {
+  currentVersion: string;
+  latestVersion: string | null;
+  hasUpdate: boolean;
+  releaseUrl: string | null;
+  releaseNotes: string | null;
+  fetchError: string | null;
 }
