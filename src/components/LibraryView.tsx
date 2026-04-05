@@ -512,6 +512,10 @@ export default function LibraryView() {
               <p className="lib-settings-hint">此选项仅在桌面版（npm run tauri dev）中可用。</p>
             )}
             <p className="lib-settings-hint lib-settings-divider">
+              便捷栏窗口固定在其他窗口下方，减少遮挡桌面内容；可在通知区找到 Mountain
+              图标，右键打开「全部应用」或「退出」。
+            </p>
+            <p className="lib-settings-hint">
               全局快捷键 <kbd className="lib-kbd">Alt</kbd>
               {" + "}
               <kbd className="lib-kbd">Shift</kbd>
@@ -599,19 +603,6 @@ export default function LibraryView() {
               <span>最近使用</span>
               <span className="lib-group-count">{usage.recentPaths.length}</span>
             </button>
-            <button
-              type="button"
-              className={
-                groupId === FREQUENT_GROUP_ID ? "lib-group active" : "lib-group"
-              }
-              onClick={() => setGroupId(FREQUENT_GROUP_ID)}
-              title="按从本启动器累计打开次数排序"
-            >
-              <span>常用</span>
-              <span className="lib-group-count">
-                {usage.frequentPaths.length}
-              </span>
-            </button>
             {store.groups.map((g) =>
               renamingGroupId === g.id ? (
                 <div key={g.id} className="lib-group-row active">
@@ -680,6 +671,22 @@ export default function LibraryView() {
                 </div>
               ),
             )}
+            <div className="lib-sidebar-frequent-anchor">
+              <div className="lib-side-title lib-side-title-sub">常用</div>
+              <button
+                type="button"
+                className={
+                  groupId === FREQUENT_GROUP_ID ? "lib-group active" : "lib-group"
+                }
+                onClick={() => setGroupId(FREQUENT_GROUP_ID)}
+                title="按从本启动器累计打开次数排序"
+              >
+                <span>启动次数最多</span>
+                <span className="lib-group-count">
+                  {usage.frequentPaths.length}
+                </span>
+              </button>
+            </div>
           </div>
           <div className="lib-sidebar-footer">
             <div className="lib-new-group">

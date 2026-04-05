@@ -6,6 +6,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
+use tauri::menu::MenuBuilder;
+use tauri::tray::TrayIconBuilder;
 use tauri::{Emitter, Manager, RunEvent};
 use uuid::Uuid;
 
@@ -669,6 +671,40 @@ pub fn run() {
                 }
             };
             kb.build()
+        })
+        .setup(|app| {
+            #[cfg(not(any(target_os = "android", target_os = "ios")))]
+            {
+                let menu = MenuBuilder::new(app)
+                    .text("library", "打开全部应用")
+                    .separator()
+                    .text("quit", "退出 Mountain")
+                    .build()
+                    .expect("tray menu");
+
+                let Some(icon) = app.default_window_icon().cloned() else {
+                    eprintln!("Mountain: 无内嵌窗口图标，跳过系统托盘");
+                    return Ok(());
+                };
+
+                let _tray = TrayIconBuilder::with_id("main")
+                    .icon(icon)
+                    .tooltip("Mountain 启动器 — 右键菜单可退出")
+                    .menu(&menu)
+                    .on_menu_event(|app, event| {
+                        if event.id == "library" {
+                            let h = app.clone();
+                            tauri::async_runtime::spawn(async move {
+                                let _ = show_library_window(h).await;
+                            });
+                        } else if event.id == "quit" {
+                            app.exit(0);
+                        }
+                    })
+                    .build(app)
+                    .expect("tray icon");
+            }
+            Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             load_store,
