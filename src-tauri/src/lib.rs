@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 use std::fs;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -636,6 +637,9 @@ async fn pick_executable(app: tauri::AppHandle) -> Result<Option<String>, String
 /// 登录/计划任务自启时传入；仅显示便捷栏，不打开「全部应用」窗口（与 window-state 恢复顺序无关，每帧兜底 hide）
 const AUTOSTART_ARG: &str = "--mountain-autostart";
 
+/// 首次进入主循环时再 hide 一次 library，避免 window-state 在 Ready 之后把「全部应用」恢复成可见
+static LIB_HIDE_AFTER_RESTORE: AtomicBool = AtomicBool::new(true);
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let context = tauri::generate_context!();
@@ -725,14 +729,27 @@ pub fn run() {
         .expect("error while building tauri application");
 
     app.run(|app, event| {
-        if let RunEvent::MainEventsCleared = event {
-            if std::env::args().any(|a| a == AUTOSTART_ARG) {
+        match event {
+            RunEvent::Ready => {
                 if let Some(lib) = app.get_webview_window("library") {
-                    if lib.is_visible().unwrap_or(false) {
+                    let _ = lib.hide();
+                }
+            }
+            RunEvent::MainEventsCleared => {
+                if LIB_HIDE_AFTER_RESTORE.swap(false, Ordering::SeqCst) {
+                    if let Some(lib) = app.get_webview_window("library") {
                         let _ = lib.hide();
                     }
                 }
+                if std::env::args().any(|a| a == AUTOSTART_ARG) {
+                    if let Some(lib) = app.get_webview_window("library") {
+                        if lib.is_visible().unwrap_or(false) {
+                            let _ = lib.hide();
+                        }
+                    }
+                }
             }
+            _ => {}
         }
     });
 }
