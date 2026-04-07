@@ -100,6 +100,11 @@ export default function LibraryView() {
   const [newGroupName, setNewGroupName] = useState("");
   const [renamingGroupId, setRenamingGroupId] = useState<string | null>(null);
   const [renameDraft, setRenameDraft] = useState("");
+  const [dragPath, setDragPath] = useState<string | null>(null);
+  const [dragGroupId, setDragGroupId] = useState<string | null>(null);
+  const [dropGroupId, setDropGroupId] = useState<string | null>(null);
+  const [dropMemberPath, setDropMemberPath] = useState<string | null>(null);
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [autostartOn, setAutostartOn] = useState(false);
   const [autostartLoading, setAutostartLoading] = useState(true);
@@ -285,7 +290,7 @@ export default function LibraryView() {
     if (groupId === RECENT_GROUP_ID) {
       list = usage.recentPaths.map((p) => resolvePathToApp(p));
     } else if (groupId === FREQUENT_GROUP_ID) {
-      list = usage.frequentPaths.map((p) => resolvePathToApp(p));
+      list = usage.frequentPaths.map((e) => resolvePathToApp(e.path));
     } else if (groupId === DOCK_GROUP_ID && store) {
       list = dockAppsList;
     } else if (groupId !== "all" && store) {
@@ -315,6 +320,14 @@ export default function LibraryView() {
     resolvePathToApp,
   ]);
 
+  const frequentCount = useMemo(() => {
+    const m: Record<string, number> = {};
+    for (const e of usage.frequentPaths) {
+      m[e.path.toLowerCase()] = e.count;
+    }
+    return m;
+  }, [usage.frequentPaths]);
+
   const runScan = () => {
     setScanning(true);
     void invoke<AppCatalogDto>("refresh_app_catalog")
@@ -327,17 +340,23 @@ export default function LibraryView() {
     void invoke<string | null>("pick_executable")
       .then((p) => {
         if (!p) return;
-        void invoke<DockItem>("new_dock_item", {
-          path: p,
-          title: null,
-        }).then((item) => {
-          setStore((prev) => {
-            if (!prev) return prev;
-            const next = { ...prev, dock: [...prev.dock, item] };
-            debouncedSave.current(next);
-            return next;
-          });
-        });
+        void invoke<AppCatalogDto>("add_manual_executable", { path: p })
+          .then((dto) => {
+            applyCatalog(dto);
+            return invoke<DockItem>("new_dock_item", {
+              path: p,
+              title: null,
+            });
+          })
+          .then((item) => {
+            setStore((prev) => {
+              if (!prev) return prev;
+              const next = { ...prev, dock: [...prev.dock, item] };
+              debouncedSave.current(next);
+              return next;
+            });
+          })
+          .catch((e) => console.error(String(e)));
       })
       .catch((e) => console.error(String(e)));
   };
@@ -376,19 +395,107 @@ export default function LibraryView() {
     );
   };
 
+  const pinPath = useCallback(
+    (path: string) => {
+      if (!store) return;
+      const row = scanned.find(
+        (a) => a.path.toLowerCase() === path.toLowerCase(),
+      );
+      void invoke<DockItem>("new_dock_item", {
+        path,
+        title: row?.name ?? null,
+      }).then((item) => {
+        setStore((prev) => {
+          if (!prev) return prev;
+          const exists = prev.dock.some(
+            (d) => d.path.toLowerCase() === item.path.toLowerCase(),
+          );
+          if (exists) return prev;
+          const next = { ...prev, dock: [...prev.dock, item] };
+          debouncedSave.current(next);
+          return next;
+        });
+      });
+    },
+    [store, scanned],
+  );
+
+  const addPathToGroup = useCallback(
+    (path: string, gid: string) => {
+      if (!store) return;
+      if (gid === DOCK_GROUP_ID) {
+        pinPath(path);
+        return;
+      }
+      const next = store.groups.map((g) => {
+        if (g.id !== gid) return g;
+        if (g.paths.some((p) => p.toLowerCase() === path.toLowerCase()))
+          return g;
+        return { ...g, paths: [...g.paths, path] };
+      });
+      persist({ ...store, groups: next });
+    },
+    [store, persist, pinPath],
+  );
+
   const addSelectedToGroup = (gid: string) => {
-    if (!selectedPath || !store) return;
-    if (gid === DOCK_GROUP_ID) {
-      pinSelected();
-      return;
-    }
-    const next = store.groups.map((g) => {
-      if (g.id !== gid) return g;
-      if (g.paths.some((p) => p.toLowerCase() === selectedPath.toLowerCase()))
-        return g;
-      return { ...g, paths: [...g.paths, selectedPath] };
+    if (!selectedPath) return;
+    addPathToGroup(selectedPath, gid);
+  };
+
+  const reorderGroups = useCallback((fromId: string, toId: string) => {
+    setStore((prev) => {
+      if (!prev) return prev;
+      const arr = [...prev.groups];
+      const fromIdx = arr.findIndex((g) => g.id === fromId);
+      const toIdx = arr.findIndex((g) => g.id === toId);
+      if (fromIdx === -1 || toIdx === -1 || fromIdx === toIdx) return prev;
+      const [moved] = arr.splice(fromIdx, 1);
+      arr.splice(toIdx, 0, moved);
+      const next = { ...prev, groups: arr };
+      debouncedSave.current(next);
+      return next;
     });
-    persist({ ...store, groups: next });
+  }, []);
+
+  const reorderGroupMembers = useCallback(
+    (gid: string, fromPath: string, toPath: string) => {
+      setStore((prev) => {
+        if (!prev) return prev;
+        const next: AppStore = {
+          ...prev,
+          groups: prev.groups.map((g) => {
+            if (g.id !== gid) return g;
+            const arr = [...g.paths];
+            const fromIdx = arr.findIndex(
+              (p) => p.toLowerCase() === fromPath.toLowerCase(),
+            );
+            const toIdx = arr.findIndex(
+              (p) => p.toLowerCase() === toPath.toLowerCase(),
+            );
+            if (fromIdx === -1 || toIdx === -1 || fromIdx === toIdx) return g;
+            const [moved] = arr.splice(fromIdx, 1);
+            arr.splice(toIdx, 0, moved);
+            return { ...g, paths: arr };
+          }),
+        };
+        debouncedSave.current(next);
+        return next;
+      });
+    },
+    [],
+  );
+
+  const confirmDeleteGroup = (gid: string) => {
+    if (!store) return;
+    const next = {
+      ...store,
+      groups: store.groups.filter((g) => g.id !== gid),
+    };
+    persist(next);
+    if (groupId === gid) setGroupId("all");
+    if (renamingGroupId === gid) setRenamingGroupId(null);
+    setConfirmDeleteId(null);
   };
 
   const removeFromDockByPath = (path: string) => {
@@ -479,14 +586,7 @@ export default function LibraryView() {
       gid === FREQUENT_GROUP_ID
     )
       return;
-    if (!window.confirm("确定删除该分组？组内应用不会从便捷栏移除。")) return;
-    const next = {
-      ...store,
-      groups: store.groups.filter((g) => g.id !== gid),
-    };
-    persist(next);
-    if (groupId === gid) setGroupId("all");
-    if (renamingGroupId === gid) setRenamingGroupId(null);
+    setConfirmDeleteId(gid);
   };
 
   const commitRenameGroup = () => {
@@ -718,41 +818,114 @@ export default function LibraryView() {
                 <div
                   key={g.id}
                   className={
-                    groupId === g.id ? "lib-group-row active" : "lib-group-row"
+                    "lib-group-row" +
+                    (groupId === g.id ? " active" : "") +
+                    (dragGroupId === g.id ? " dragging" : "") +
+                    (dropGroupId === g.id ? " drop-target" : "")
                   }
+                  draggable
+                  onDragStart={(e) => {
+                    setDragGroupId(g.id);
+                    e.dataTransfer.setData("text/mountain-group", g.id);
+                    e.dataTransfer.effectAllowed = "move";
+                  }}
+                  onDragEnd={() => {
+                    setDragGroupId(null);
+                    setDropGroupId(null);
+                  }}
+                  onDragOver={(e) => {
+                    if (dragGroupId && dragGroupId !== g.id) {
+                      e.preventDefault();
+                      setDropGroupId(g.id);
+                    } else if (dragPath) {
+                      e.preventDefault();
+                      setDropGroupId(g.id);
+                    }
+                  }}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    const appPath = e.dataTransfer.getData(
+                      "text/mountain-app",
+                    );
+                    const grpId = e.dataTransfer.getData(
+                      "text/mountain-group",
+                    );
+                    if (appPath) {
+                      addPathToGroup(appPath, g.id);
+                    } else if (grpId && grpId !== g.id) {
+                      reorderGroups(grpId, g.id);
+                    }
+                    setDragPath(null);
+                    setDragGroupId(null);
+                    setDropGroupId(null);
+                  }}
                 >
                   <button
                     type="button"
                     className="lib-group-main"
                     onClick={() => setGroupId(g.id)}
+                    onDoubleClick={() => {
+                      setRenamingGroupId(g.id);
+                      setRenameDraft(g.name);
+                    }}
+                    title="单击查看；双击重命名；拖拽可调整顺序；将中间应用拖到此处可加入分组"
                   >
                     <span className="lib-group-name-truncate">{g.name}</span>
                     <span className="lib-group-count">{g.paths.length}</span>
                   </button>
                   <div className="lib-group-actions">
-                    <button
-                      type="button"
-                      className="lib-group-action"
-                      title="重命名"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setRenamingGroupId(g.id);
-                        setRenameDraft(g.name);
-                      }}
-                    >
-                      ✎
-                    </button>
-                    <button
-                      type="button"
-                      className="lib-group-action danger"
-                      title="删除分组"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        deleteGroup(g.id);
-                      }}
-                    >
-                      ×
-                    </button>
+                    {confirmDeleteId === g.id ? (
+                      <span className="lib-group-confirm">
+                        <span className="lib-group-confirm-text">删除？</span>
+                        <button
+                          type="button"
+                          className="lib-group-action danger"
+                          title="组内应用不会从便捷栏移除"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            confirmDeleteGroup(g.id);
+                          }}
+                        >
+                          确定
+                        </button>
+                        <button
+                          type="button"
+                          className="lib-group-action"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setConfirmDeleteId(null);
+                          }}
+                        >
+                          取消
+                        </button>
+                      </span>
+                    ) : (
+                      <>
+                        <button
+                          type="button"
+                          className="lib-group-action"
+                          title="重命名"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setRenamingGroupId(g.id);
+                            setRenameDraft(g.name);
+                          }}
+                        >
+                          ✎
+                        </button>
+                        <button
+                          type="button"
+                          className="lib-group-action danger"
+                          title="删除分组"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            deleteGroup(g.id);
+                          }}
+                        >
+                          ×
+                        </button>
+                      </>
+                    )}
                   </div>
                 </div>
               ),
@@ -822,8 +995,46 @@ export default function LibraryView() {
                     <li key={a.path}>
                       <div
                         className={
-                          active ? "lib-row-wrap active" : "lib-row-wrap"
+                          "lib-row-wrap" +
+                          (active ? " active" : "") +
+                          (dragPath === a.path ? " dragging" : "") +
+                          (isCustomGroupView && dropMemberPath === a.path
+                            ? " drop-target"
+                            : "")
                         }
+                        draggable
+                        onDragStart={(e) => {
+                          setDragPath(a.path);
+                          e.dataTransfer.setData("text/mountain-app", a.path);
+                          e.dataTransfer.effectAllowed = "copyMove";
+                        }}
+                        onDragEnd={() => {
+                          setDragPath(null);
+                          setDropMemberPath(null);
+                          setDropGroupId(null);
+                        }}
+                        onDragOver={(e) => {
+                          if (
+                            isCustomGroupView &&
+                            dragPath &&
+                            dragPath !== a.path
+                          ) {
+                            e.preventDefault();
+                            setDropMemberPath(a.path);
+                          }
+                        }}
+                        onDrop={(e) => {
+                          if (isCustomGroupView) {
+                            e.preventDefault();
+                            const p = e.dataTransfer.getData(
+                              "text/mountain-app",
+                            );
+                            if (p && p !== a.path)
+                              reorderGroupMembers(groupId, p, a.path);
+                          }
+                          setDragPath(null);
+                          setDropMemberPath(null);
+                        }}
                         onContextMenu={
                           isCustomGroupView
                             ? (e) => {
@@ -848,6 +1059,15 @@ export default function LibraryView() {
                             <span className="lib-row-path">{a.path}</span>
                           </span>
                         </button>
+                        {groupId === FREQUENT_GROUP_ID &&
+                        frequentCount[a.path.toLowerCase()] != null ? (
+                          <span
+                            className="lib-freq-count"
+                            title="累计启动次数"
+                          >
+                            {frequentCount[a.path.toLowerCase()]} 次
+                          </span>
+                        ) : null}
                         {groupId === DOCK_GROUP_ID && (
                           <button
                             type="button"
@@ -889,10 +1109,23 @@ export default function LibraryView() {
                   )}
                 </dd>
               </dl>
+              {frequentCount[selectedPath.toLowerCase()] != null && (
+                <p className="lib-muted">
+                  已启动 {frequentCount[selectedPath.toLowerCase()]} 次
+                </p>
+              )}
               <div className="lib-detail-actions">
                 <button
                   type="button"
-                  onClick={() => void invoke("launch_app", { path: selectedPath })}
+                  onClick={() => {
+                    const row = resolvePathToApp(selectedPath);
+                    void invoke("launch_app", {
+                      path: selectedPath,
+                      ...(row.workingDirectory
+                        ? { workingDirectory: row.workingDirectory }
+                        : {}),
+                    });
+                  }}
                 >
                   启动
                 </button>

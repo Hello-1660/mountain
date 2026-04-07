@@ -83,7 +83,7 @@
   border-radius: 12px;
   background: linear-gradient(145deg, #3a3d46, #2c2e34);
   color: #f2f2f4;
-  cursor: grab;
+  cursor: default;
   flex-shrink: 0;
   display: grid;
   place-items: center;
@@ -91,10 +91,6 @@
   transition: transform 0.12s ease, background 0.12s ease;
   user-select: none;
   -webkit-user-drag: element;
-}
-
-.dock-tile:active {
-  cursor: grabbing;
 }
 
 .dock-tile:hover {

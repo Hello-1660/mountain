@@ -453,6 +453,18 @@
   word-break: break-all;
 }
 
+.lib-freq-count {
+  flex-shrink: 0;
+  align-self: center;
+  margin-right: 0.6rem;
+  padding: 0.15rem 0.5rem;
+  border-radius: 999px;
+  background: rgba(100, 149, 237, 0.18);
+  color: #b8ccff;
+  font-size: 0.74rem;
+  white-space: nowrap;
+}
+
 .lib-empty {
   margin: 0;
   color: rgba(255, 255, 255, 0.45);
@@ -653,6 +665,54 @@
 
 .lib-warn-text {
   color: #e8a598;
+}
+
+/* 拖拽编辑：分组与成员 */
+.lib-group-row[draggable="true"] {
+  cursor: grab;
+}
+
+.lib-group-row.dragging {
+  opacity: 0.5;
+}
+
+.lib-group-row.drop-target {
+  outline: 2px dashed rgba(100, 149, 237, 0.75);
+  outline-offset: -2px;
+  background: rgba(100, 149, 237, 0.14);
+}
+
+.lib-row-wrap[draggable="true"] {
+  cursor: grab;
+}
+
+.lib-row-wrap.dragging {
+  opacity: 0.5;
+}
+
+.lib-row-wrap.drop-target {
+  outline: 2px dashed rgba(100, 149, 237, 0.75);
+  outline-offset: -2px;
+  background: rgba(100, 149, 237, 0.12);
+}
+
+.lib-group-confirm {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0 0.2rem;
+}
+
+.lib-group-confirm-text {
+  font-size: 0.74rem;
+  color: rgba(255, 255, 255, 0.7);
+  white-space: nowrap;
+}
+
+.lib-group-confirm .lib-group-action {
+  width: 24px;
+  height: 22px;
+  font-size: 0.7rem;
 }
 
 @media (max-width: 820px) {

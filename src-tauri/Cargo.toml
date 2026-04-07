@@ -1,8 +1,8 @@
 [package]
-name = "tauri-app"
-version = "1.0.1"
-description = "A Tauri App"
-authors = ["you"]
+name = "Mountain"
+version = "1.0.2"
+description = "桌面坞"
+authors = ["tingshang"]
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
@@ -31,4 +31,10 @@ tauri-plugin-autostart = "2"
 tauri-plugin-global-shortcut = "2"
 ureq = "3.3.0"
 semver = "1.0.28"
+windows = { version = "0.61", features = ["Win32_UI_WindowsAndMessaging", "Win32_Foundation"] }
+# Workaround: schemars 0.8.22 (used by tauri-build) pulls indexmap 1.x without the `std`
+# feature, so indexmap is compiled no_std and its `IndexMap<K,V,S>` loses the default `S`,
+# breaking schemars' `Map<K,V> = indexmap::IndexMap<K,V>` (E0107). Forcing `std` here makes
+# Cargo unify indexmap 1.9.x with the `std` feature enabled.
+indexmap = { version = "=1.9.3", features = ["std"] }
 

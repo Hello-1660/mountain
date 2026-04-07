@@ -4,9 +4,10 @@ use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::OnceLock;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 /// 避免从 GUI 主进程拉起 PowerShell 时短暂弹出黑色控制台窗口。
 #[cfg(target_os = "windows")]
@@ -52,8 +53,14 @@ pub struct ScannedApp {
     pub path: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub shortcut: Option<String>,
+    /// 开始菜单 .lnk 的「起始位置」，部分程序依赖此目录才能启动
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub working_dir: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub icon_path: Option<String>,
+    /// 用户「手动添加」写入目录；重新扫描开始菜单时会保留此类条目
+    #[serde(default)]
+    pub manual: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -92,9 +99,16 @@ pub struct UsageFile {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct FrequentEntry {
+    pub path: String,
+    pub count: u32,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct UsageSnapshotDto {
     pub recent_paths: Vec<String>,
-    pub frequent_paths: Vec<String>,
+    pub frequent_paths: Vec<FrequentEntry>,
 }
 
 #[derive(Serialize)]
@@ -323,6 +337,51 @@ fn load_app_catalog(app: tauri::AppHandle) -> Result<AppCatalogDto, String> {
     serde_json::from_str(&raw).map_err(|e| e.to_string())
 }
 
+/// 将手动选择的 exe 并入本地目录（供「全部」列表与持久化 catalog 使用）。
+#[tauri::command]
+fn add_manual_executable(app: tauri::AppHandle, path: String) -> Result<AppCatalogDto, String> {
+    let path = path.trim().to_string();
+    if path.is_empty() {
+        return Err("路径为空".into());
+    }
+    let pb = Path::new(&path);
+    if !pb.is_file() {
+        return Err("不是有效的可执行文件".into());
+    }
+    let mut dto = load_app_catalog(app.clone())?;
+    if dto
+        .apps
+        .iter()
+        .any(|a| a.path.eq_ignore_ascii_case(&path))
+    {
+        return Ok(dto);
+    }
+    let name = pb
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("应用")
+        .to_string();
+    let working_dir = pb
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .and_then(|p| p.to_str())
+        .map(String::from);
+    let icon_path = ensure_icon_for_exe(&app, &path).unwrap_or(None);
+    dto.apps.push(ScannedApp {
+        name,
+        path,
+        shortcut: None,
+        working_dir,
+        icon_path,
+        manual: true,
+    });
+    dto
+        .apps
+        .sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    save_catalog(&app, &dto)?;
+    Ok(dto)
+}
+
 fn scan_start_menu_collect() -> Result<Vec<ScannedApp>, String> {
     #[cfg(not(target_os = "windows"))]
     {
@@ -345,7 +404,7 @@ foreach ($root in $roots) {
     try {
       $w = New-Object -ComObject WScript.Shell
       $s = $w.CreateShortcut($_.FullName)
-      $t = $s.TargetPath
+        $t = $s.TargetPath
       if (-not $t) { }
       elseif ($t -notmatch '\.(exe|EXE)$') { }
       elseif (-not (Test-Path -LiteralPath $t -PathType Leaf)) { }
@@ -353,11 +412,16 @@ foreach ($root in $roots) {
         $key = $t.ToLowerInvariant()
         if (-not $seen.ContainsKey($key)) {
           $seen[$key] = $true
-          [void]$results.Add([ordered]@{
+          $item = [ordered]@{
             name = [System.IO.Path]::GetFileNameWithoutExtension($_.Name)
             path = $t
             shortcut = $_.FullName
-          })
+          }
+          $wd = $s.WorkingDirectory
+          if ($wd -and ((Test-Path -LiteralPath $wd -PathType Container))) {
+            $item['workingDirectory'] = $wd
+          }
+          [void]$results.Add($item)
         }
       }
     } catch {}
@@ -416,10 +480,24 @@ if ($results.Count -eq 0) { '[]' } else { ($results | ConvertTo-Json -Depth 4 -C
 }
 
 fn refresh_catalog_blocking(app: tauri::AppHandle) -> Result<AppCatalogDto, String> {
+    let prev = load_app_catalog(app.clone()).unwrap_or(AppCatalogDto {
+        apps: vec![],
+        scanned_at: None,
+    });
     let mut apps = scan_start_menu_collect()?;
+    let mut paths: HashSet<String> = apps.iter().map(|a| a.path.to_lowercase()).collect();
+    for a in &prev.apps {
+        if a.manual && !paths.contains(&a.path.to_lowercase()) {
+            paths.insert(a.path.to_lowercase());
+            let mut m = a.clone();
+            m.icon_path = ensure_icon_for_exe(&app, &m.path).unwrap_or(None);
+            apps.push(m);
+        }
+    }
     for a in &mut apps {
         a.icon_path = ensure_icon_for_exe(&app, &a.path).unwrap_or(None);
     }
+    apps.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
     let dto = AppCatalogDto {
         scanned_at: Some(now_unix_ms()),
         apps,
@@ -509,15 +587,85 @@ fn file_detail(path: String) -> Result<FileDetail, String> {
     })
 }
 
+fn launch_cwd_for_exe(exe: &Path, working_dir: Option<&str>) -> Option<PathBuf> {
+    let from_shortcut = working_dir
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(PathBuf::from)
+        .filter(|p| p.is_dir());
+    if from_shortcut.is_some() {
+        return from_shortcut;
+    }
+    exe.parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .map(PathBuf::from)
+}
+
+/// Windows：通过 `cmd /c start` 调用 ShellExecute("open") 启动程序。
+/// 与「双击」等价，会按 exe 的清单自动请求 UAC 提权，适合需要管理员权限的程序。
+#[cfg(target_os = "windows")]
+fn shell_open(path: &str, working_dir: Option<&Path>) -> Result<(), String> {
+    let mut cmd = Command::new("cmd");
+    // `start "" <path>` 经由 ShellExecute("open") 启动；先给一个空标题占位，
+    // 避免路径被误判为窗口标题。带空格的路径由 Rust 自动加引号。
+    cmd.args(["/c", "start", "", path]);
+    if let Some(dir) = working_dir {
+        cmd.current_dir(dir);
+    }
+    hide_console_for_child(&mut cmd);
+    let out = cmd.output().map_err(|e| format!("启动失败: {e}"))?;
+    if !out.status.success() {
+        return Err(format!("启动失败 (code {:?})", out.status.code()));
+    }
+    Ok(())
+}
+
 #[tauri::command]
-fn launch_app(app: tauri::AppHandle, path: String) -> Result<(), String> {
+fn launch_app(
+    app: tauri::AppHandle,
+    path: String,
+    working_directory: Option<String>,
+) -> Result<(), String> {
     let path = path.trim();
     if path.is_empty() {
         return Err("路径为空".into());
     }
-    Command::new(path)
-        .spawn()
-        .map_err(|e| format!("启动失败: {e}"))?;
+    let exe = Path::new(path);
+    let wd = launch_cwd_for_exe(
+        exe,
+        working_directory
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty()),
+    );
+
+    #[cfg(target_os = "windows")]
+    {
+        // 先尝试 CreateProcess：文件不存在等错误能直接返回。
+        // 若失败（如 Geek Uninstaller 的 exe 带 requireAdministrator 清单会返回
+        // ERROR_ELEVATION_REQUIRED=740，或其他 ShellExecute 才能处理的情形），
+        // 退回 ShellExecute("open")，与「双击」一致：按清单自动弹 UAC 提权启动。
+        let mut cmd = Command::new(path);
+        if let Some(ref dir) = wd {
+            cmd.current_dir(dir);
+        }
+        match cmd.spawn() {
+            Ok(_) => {}
+            Err(e) => match shell_open(path, wd.as_deref()) {
+                Ok(_) => {}
+                Err(_) => return Err(format!("启动失败: {e}")),
+            },
+        }
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let mut cmd = Command::new(path);
+        if let Some(ref dir) = wd {
+            cmd.current_dir(dir);
+        }
+        cmd.spawn().map_err(|e| format!("启动失败: {e}"))?;
+    }
+
     if let Err(e) = record_launch(&app, path) {
         eprintln!("record_launch: {e}");
     }
@@ -543,10 +691,13 @@ fn load_usage_snapshot(app: tauri::AppHandle) -> Result<UsageSnapshotDto, String
             .cmp(&a.launch_count)
             .then_with(|| b.last_used_ms.cmp(&a.last_used_ms))
     });
-    let frequent_paths: Vec<String> = by_freq
+    let frequent_paths: Vec<FrequentEntry> = by_freq
         .into_iter()
         .take(40)
-        .map(|e| e.path)
+        .map(|e| FrequentEntry {
+            path: e.path,
+            count: e.launch_count,
+        })
         .collect();
 
     Ok(UsageSnapshotDto {
@@ -653,11 +804,16 @@ async fn pick_executable(app: tauri::AppHandle) -> Result<Option<String>, String
     Ok(file.map(|f| f.to_string()))
 }
 
-/// 登录/计划任务自启时传入；仅显示便捷栏，不打开「全部应用」窗口（与 window-state 恢复顺序无关，每帧兜底 hide）
+/// 登录/计划任务自启时传入；仅显示便捷栏，不打开「全部应用」窗口。
 const AUTOSTART_ARG: &str = "--mountain-autostart";
+
+/// 自启后仅在短时间内与 window-state 抢「隐藏 library」；超时后不再拦截，否则用户打开窗口会在下一帧被误关。
+const AUTOSTART_SUPPRESS_LIBRARY_VISIBLE_SECS: u64 = 8;
 
 /// 首次进入主循环时再 hide 一次 library，避免 window-state 在 Ready 之后把「全部应用」恢复成可见
 static LIB_HIDE_AFTER_RESTORE: AtomicBool = AtomicBool::new(true);
+
+static PROCESS_START: OnceLock<Instant> = OnceLock::new();
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -698,6 +854,29 @@ pub fn run() {
         .setup(|app| {
             #[cfg(not(any(target_os = "android", target_os = "ios")))]
             {
+                // 让「便捷启动」坞常驻屏幕最底层、不抢占焦点、不遮挡其他窗口：
+                // 给窗口加 WS_EX_NOACTIVATE，点击它不会使其成为前台窗口（不会跳到最前），
+                // 配合配置里的 alwaysOnBottom(HWND_BOTTOM)，始终位于其他窗口之下。
+                #[cfg(target_os = "windows")]
+                {
+                    if let Some(win) = app.get_webview_window("dock") {
+                        use windows::Win32::UI::WindowsAndMessaging::{
+                            GetWindowLongPtrW, SetWindowLongPtrW, GWL_EXSTYLE,
+                            WS_EX_NOACTIVATE,
+                        };
+                        if let Ok(hwnd) = win.hwnd() {
+                            unsafe {
+                                let ex = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+                                let _ = SetWindowLongPtrW(
+                                    hwnd,
+                                    GWL_EXSTYLE,
+                                    ex | WS_EX_NOACTIVATE.0 as isize,
+                                );
+                            }
+                        }
+                    }
+                }
+
                 let menu = MenuBuilder::new(app)
                     .text("library", "打开全部应用")
                     .separator()
@@ -737,6 +916,7 @@ pub fn run() {
             file_detail,
             launch_app,
             load_app_catalog,
+            add_manual_executable,
             refresh_app_catalog,
             read_icon_data_url,
             pick_executable,
@@ -750,6 +930,7 @@ pub fn run() {
     app.run(|app, event| {
         match event {
             RunEvent::Ready => {
+                PROCESS_START.get_or_init(Instant::now);
                 if let Some(lib) = app.get_webview_window("library") {
                     let _ = lib.hide();
                 }
@@ -761,9 +942,12 @@ pub fn run() {
                     }
                 }
                 if std::env::args().any(|a| a == AUTOSTART_ARG) {
-                    if let Some(lib) = app.get_webview_window("library") {
-                        if lib.is_visible().unwrap_or(false) {
-                            let _ = lib.hide();
+                    let start = PROCESS_START.get_or_init(Instant::now);
+                    if start.elapsed() < Duration::from_secs(AUTOSTART_SUPPRESS_LIBRARY_VISIBLE_SECS) {
+                        if let Some(lib) = app.get_webview_window("library") {
+                            if lib.is_visible().unwrap_or(false) {
+                                let _ = lib.hide();
+                            }
                         }
                     }
                 }
