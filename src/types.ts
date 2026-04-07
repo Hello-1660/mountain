@@ -37,7 +37,11 @@ export interface ScannedApp {
   name: string;
   path: string;
   shortcut?: string;
+  /** 开始菜单快捷方式「起始位置」，与 Rust/catalog JSON 字段一致 */
+  workingDirectory?: string;
   iconPath?: string;
+  /** 手动添加进目录，重新扫描时会保留 */
+  manual?: boolean;
 }
 
 export interface AppCatalogDto {

@@ -327,17 +327,23 @@ export default function LibraryView() {
     void invoke<string | null>("pick_executable")
       .then((p) => {
         if (!p) return;
-        void invoke<DockItem>("new_dock_item", {
-          path: p,
-          title: null,
-        }).then((item) => {
-          setStore((prev) => {
-            if (!prev) return prev;
-            const next = { ...prev, dock: [...prev.dock, item] };
-            debouncedSave.current(next);
-            return next;
-          });
-        });
+        void invoke<AppCatalogDto>("add_manual_executable", { path: p })
+          .then((dto) => {
+            applyCatalog(dto);
+            return invoke<DockItem>("new_dock_item", {
+              path: p,
+              title: null,
+            });
+          })
+          .then((item) => {
+            setStore((prev) => {
+              if (!prev) return prev;
+              const next = { ...prev, dock: [...prev.dock, item] };
+              debouncedSave.current(next);
+              return next;
+            });
+          })
+          .catch((e) => console.error(String(e)));
       })
       .catch((e) => console.error(String(e)));
   };
@@ -892,7 +898,15 @@ export default function LibraryView() {
               <div className="lib-detail-actions">
                 <button
                   type="button"
-                  onClick={() => void invoke("launch_app", { path: selectedPath })}
+                  onClick={() => {
+                    const row = resolvePathToApp(selectedPath);
+                    void invoke("launch_app", {
+                      path: selectedPath,
+                      ...(row.workingDirectory
+                        ? { workingDirectory: row.workingDirectory }
+                        : {}),
+                    });
+                  }}
                 >
                   启动
                 </button>
