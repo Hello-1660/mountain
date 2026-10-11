@@ -56,9 +56,14 @@ export interface FileDetail {
   exists: boolean;
 }
 
+export interface FrequentEntry {
+  path: string;
+  count: number;
+}
+
 export interface UsageSnapshot {
   recentPaths: string[];
-  frequentPaths: string[];
+  frequentPaths: FrequentEntry[];
 }
 
 export interface UpdateCheckDto {

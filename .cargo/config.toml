@@ -1,0 +1,11 @@
+# Workaround for a build-time error in the dependency graph:
+#   schemars 0.8.22 (pulled in by tauri-build) defines
+#   `pub type Map<K, V> = indexmap::IndexMap<K, V>;` only when its `preserve_order`
+#   feature is on. indexmap 1.9.x gates the `S = RandomState` default of `IndexMap`
+# behind `#[cfg(has_std)]`, and its build script only emits that cfg when either the
+# `std` feature is enabled OR an `autocfg` probe succeeds. In this environment the
+# probe fails and the `std` feature alone is not reliably picked up, so we force the
+# `has_std` cfg for the Windows MSVC target directly. This only affects indexmap's
+# type definition and is a no-op for every other crate.
+[target.x86_64-pc-windows-msvc]
+rustflags = ["--cfg", "has_std"]

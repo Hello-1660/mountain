@@ -99,9 +99,16 @@ pub struct UsageFile {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct FrequentEntry {
+    pub path: String,
+    pub count: u32,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct UsageSnapshotDto {
     pub recent_paths: Vec<String>,
-    pub frequent_paths: Vec<String>,
+    pub frequent_paths: Vec<FrequentEntry>,
 }
 
 #[derive(Serialize)]
@@ -594,6 +601,25 @@ fn launch_cwd_for_exe(exe: &Path, working_dir: Option<&str>) -> Option<PathBuf> 
         .map(PathBuf::from)
 }
 
+/// Windows：通过 `cmd /c start` 调用 ShellExecute("open") 启动程序。
+/// 与「双击」等价，会按 exe 的清单自动请求 UAC 提权，适合需要管理员权限的程序。
+#[cfg(target_os = "windows")]
+fn shell_open(path: &str, working_dir: Option<&Path>) -> Result<(), String> {
+    let mut cmd = Command::new("cmd");
+    // `start "" <path>` 经由 ShellExecute("open") 启动；先给一个空标题占位，
+    // 避免路径被误判为窗口标题。带空格的路径由 Rust 自动加引号。
+    cmd.args(["/c", "start", "", path]);
+    if let Some(dir) = working_dir {
+        cmd.current_dir(dir);
+    }
+    hide_console_for_child(&mut cmd);
+    let out = cmd.output().map_err(|e| format!("启动失败: {e}"))?;
+    if !out.status.success() {
+        return Err(format!("启动失败 (code {:?})", out.status.code()));
+    }
+    Ok(())
+}
+
 #[tauri::command]
 fn launch_app(
     app: tauri::AppHandle,
@@ -612,12 +638,34 @@ fn launch_app(
             .map(str::trim)
             .filter(|s| !s.is_empty()),
     );
-    let mut cmd = Command::new(path);
-    if let Some(ref dir) = wd {
-        cmd.current_dir(dir);
+
+    #[cfg(target_os = "windows")]
+    {
+        // 先尝试 CreateProcess：文件不存在等错误能直接返回。
+        // 若失败（如 Geek Uninstaller 的 exe 带 requireAdministrator 清单会返回
+        // ERROR_ELEVATION_REQUIRED=740，或其他 ShellExecute 才能处理的情形），
+        // 退回 ShellExecute("open")，与「双击」一致：按清单自动弹 UAC 提权启动。
+        let mut cmd = Command::new(path);
+        if let Some(ref dir) = wd {
+            cmd.current_dir(dir);
+        }
+        match cmd.spawn() {
+            Ok(_) => {}
+            Err(e) => match shell_open(path, wd.as_deref()) {
+                Ok(_) => {}
+                Err(_) => return Err(format!("启动失败: {e}")),
+            },
+        }
     }
-    cmd.spawn()
-        .map_err(|e| format!("启动失败: {e}"))?;
+    #[cfg(not(target_os = "windows"))]
+    {
+        let mut cmd = Command::new(path);
+        if let Some(ref dir) = wd {
+            cmd.current_dir(dir);
+        }
+        cmd.spawn().map_err(|e| format!("启动失败: {e}"))?;
+    }
+
     if let Err(e) = record_launch(&app, path) {
         eprintln!("record_launch: {e}");
     }
@@ -643,10 +691,13 @@ fn load_usage_snapshot(app: tauri::AppHandle) -> Result<UsageSnapshotDto, String
             .cmp(&a.launch_count)
             .then_with(|| b.last_used_ms.cmp(&a.last_used_ms))
     });
-    let frequent_paths: Vec<String> = by_freq
+    let frequent_paths: Vec<FrequentEntry> = by_freq
         .into_iter()
         .take(40)
-        .map(|e| e.path)
+        .map(|e| FrequentEntry {
+            path: e.path,
+            count: e.launch_count,
+        })
         .collect();
 
     Ok(UsageSnapshotDto {
@@ -803,6 +854,29 @@ pub fn run() {
         .setup(|app| {
             #[cfg(not(any(target_os = "android", target_os = "ios")))]
             {
+                // 让「便捷启动」坞常驻屏幕最底层、不抢占焦点、不遮挡其他窗口：
+                // 给窗口加 WS_EX_NOACTIVATE，点击它不会使其成为前台窗口（不会跳到最前），
+                // 配合配置里的 alwaysOnBottom(HWND_BOTTOM)，始终位于其他窗口之下。
+                #[cfg(target_os = "windows")]
+                {
+                    if let Some(win) = app.get_webview_window("dock") {
+                        use windows::Win32::UI::WindowsAndMessaging::{
+                            GetWindowLongPtrW, SetWindowLongPtrW, GWL_EXSTYLE,
+                            WS_EX_NOACTIVATE,
+                        };
+                        if let Ok(hwnd) = win.hwnd() {
+                            unsafe {
+                                let ex = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+                                let _ = SetWindowLongPtrW(
+                                    hwnd,
+                                    GWL_EXSTYLE,
+                                    ex | WS_EX_NOACTIVATE.0 as isize,
+                                );
+                            }
+                        }
+                    }
+                }
+
                 let menu = MenuBuilder::new(app)
                     .text("library", "打开全部应用")
                     .separator()
