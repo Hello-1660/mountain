@@ -1,34 +1,67 @@
-:root {
-  color-scheme: dark;
-  font-family: "Segoe UI", system-ui, sans-serif;
-  font-size: 15px;
-  line-height: 1.45;
-  -webkit-font-smoothing: antialiased;
-}
+@import "./styles/tokens.css";
 
-*,
-*::before,
-*::after {
-  box-sizing: border-box;
-}
+/* =====================================================================
+ * 应用级基础层
+ * ===================================================================== */
 
-html,
-body,
 #root {
+  position: relative;
+  z-index: 1;
   height: 100%;
-  margin: 0;
 }
 
-body {
-  background: #141416;
+/* ---------- 品牌图形：描边动画 ---------- */
+
+.mark-logo {
+  display: block;
 }
 
-button,
-input,
-select {
-  font: inherit;
+/* 与水印 logo 里光点的 animateMotion（6s）同周期 */
+.mark-stroke {
+  stroke-dasharray: var(--dash, 320);
+  animation: stroke-draw 6s var(--e-soft) infinite;
 }
 
-button {
-  cursor: pointer;
+.orbit-ring {
+  animation: orbit-spin 30s linear infinite;
+}
+
+.orbit-ring-rev {
+  animation: orbit-spin 44s linear infinite reverse;
+}
+
+/* ---------- 加载占位 ---------- */
+
+.boot-dots {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.boot-dots i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  opacity: 0.35;
+  animation: boot-pulse 1.1s var(--e-soft) infinite alternate;
+}
+
+.boot-dots i:nth-child(2) {
+  animation-delay: 0.14s;
+}
+
+.boot-dots i:nth-child(3) {
+  animation-delay: 0.28s;
+}
+
+@keyframes boot-pulse {
+  from {
+    opacity: 0.2;
+    transform: scale(0.7);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
 }

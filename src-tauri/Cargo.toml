@@ -1,6 +1,6 @@
 [package]
 name = "Mountain"
-version = "1.0.2"
+version = "1.1.0"
 description = "桌面坞"
 authors = ["tingshang"]
 edition = "2021"

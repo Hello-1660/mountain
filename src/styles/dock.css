@@ -1,151 +1,281 @@
+/* =====================================================================
+ * Dock 栏 · 桌面便捷启动条
+ * 几何（高度已精算，固定 132px）：
+ *   磁贴 74 + hover 放大 1.28×（94.72）+ 上移 5 + items 底留 8 = 111.72
+ *   （紧凑布局：磁贴间距 13px，放大边缘与相邻图标留 ~2.6px）
+ *   → items 114（2px 抗锯齿余量）；strip padding 10 → 124；shell 底留 8 → 132
+ * 宽度自适应：窗口宽度 = 内容真实宽（items.scrollWidth）+ 86
+ * （把手 28×2 + strip padding 5×2 + shell padding 10×2），
+ * 由 fit_dock_size 命令设置；宽度变化时以原窗口中心对称伸缩，
+ * 不重置用户拖动过的位置；应用多时 items 横向滚动。
+ * 条体与磁贴均纯透明：无底板、无毛玻璃、无边框，图标直接浮在桌面上，
+ * 仅靠放大 + hover 光环 + 启动脉冲提供反馈。
+ * 磁贴 74px，间距 13px（中心距 87）：紧凑排列，悬停放大的边缘
+ * （视觉宽 94.72）与相邻图标留 ~2.6px 空隙，不遮挡邻居图标；
+ * 图标 52px 与盒边内边距 11px，放大时两图标边缘相距 ~23px，仍清晰分离。
+ * 移动栏位：按住栏体空白处（磁贴间隙 / 分割线 / 两侧把手）拖动；
+ * 磁贴自身不触发窗口拖动（mousedown 已阻断冒泡）。
+ * ===================================================================== */
+
 .dock-shell {
   box-sizing: border-box;
   width: 100%;
-  max-width: 100vw;
-  min-height: 100vh;
-  height: 100vh;
+  height: 100%;
   display: flex;
-  align-items: center;
+  align-items: flex-end;
   justify-content: center;
-  padding: 6px;
+  padding: 0 10px 8px;
   overflow: hidden;
-  /* 窗口透明时由系统透出桌面，此处不再铺实色底 */
   background: transparent;
 }
 
-.dock-loading {
-  color: rgba(255, 255, 255, 0.35);
-  font-size: 1.2rem;
-  letter-spacing: 0.2em;
-}
-
+/* 条体纯透明：仅作布局容器，视觉完全让位给桌面 */
 .dock-strip {
+  position: relative;
   display: flex;
-  flex-direction: row;
   align-items: stretch;
   max-width: 100%;
   min-width: 0;
-  border-radius: 18px;
-  padding: 8px 0;
-  background: rgba(28, 28, 32, 0.94);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.45);
-  -webkit-app-region: no-drag;
+  padding: 5px;
 }
 
-/* 仅两侧细条拖动窗口，避免盖住图标上的 HTML5 拖放（WebView2 常见问题） */
+/* 两侧把手：整个 dock 栏的移动区域（data-tauri-drag-region） */
 .dock-drag-gutter {
   flex-shrink: 0;
-  width: 16px;
+  width: 28px;
   align-self: stretch;
-  -webkit-app-region: drag;
+  cursor: grab;
 }
 
-.dock-drag-gutter--start {
-  border-top-left-radius: 16px;
-  border-bottom-left-radius: 16px;
-  margin-left: 2px;
+.dock-drag-gutter:active {
+  cursor: grabbing;
 }
 
-.dock-drag-gutter--end {
-  border-top-right-radius: 16px;
-  border-bottom-right-radius: 16px;
-  margin-right: 2px;
-}
-
+/* 磁贴之间的空白与分割线同样可拖动；磁贴自身在 JS 里阻断冒泡 */
 .dock-items {
+  position: relative;
   display: flex;
-  flex-direction: row;
-  align-items: center;
-  gap: 8px;
-  /* 为磁贴「移除」角标（top: -4px）留出空间，避免 overflow 裁切 */
-  padding: 10px 6px 8px 6px;
+  align-items: flex-end;
+  gap: 13px;
+  height: 118px;
+  padding: 0 8px 8px;
   flex: 1;
   min-width: 0;
   overflow-x: auto;
   overflow-y: hidden;
   overscroll-behavior-x: contain;
-  -webkit-app-region: no-drag;
-  /* 避免整窗出现粗滚动条；仍可用滚轮/触控板横向滑动 */
   scrollbar-width: none;
   -ms-overflow-style: none;
+  cursor: grab;
+}
+
+.dock-items:active {
+  cursor: grabbing;
 }
 
 .dock-items::-webkit-scrollbar {
   display: none;
 }
 
-.dock-tile {
-  position: relative;
-  width: 48px;
-  height: 48px;
-  border: none;
-  border-radius: 12px;
-  background: linear-gradient(145deg, #3a3d46, #2c2e34);
-  color: #f2f2f4;
-  cursor: default;
+.dock-divider {
   flex-shrink: 0;
-  display: grid;
-  place-items: center;
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
-  transition: transform 0.12s ease, background 0.12s ease;
-  user-select: none;
-  -webkit-user-drag: element;
+  align-self: center;
+  width: 1px;
+  height: 34px;
+  margin: 0 2px 8px;
+  background: linear-gradient(
+    to bottom,
+    transparent,
+    rgba(255, 255, 255, 0.18),
+    transparent
+  );
 }
 
+/* ---------- 磁贴：纯透明，图标直接浮在桌面 ---------- */
+
+.dock-tile {
+  position: relative;
+  flex: 0 0 auto;
+  width: 74px;
+  height: 74px;
+  border-radius: var(--r-lg);
+  display: grid;
+  place-items: center;
+  color: var(--text-1);
+  background: transparent;
+  box-shadow: none;
+  transform-origin: bottom center;
+  transform: translateY(calc(var(--lift, 0) * -5px)) scale(var(--s, 1));
+  transition:
+    transform var(--t2) var(--e-out),
+    box-shadow var(--t2) var(--e-out);
+  user-select: none;
+  -webkit-user-drag: element;
+  cursor: pointer;
+}
+
+/* hover 反馈由光环承担：透明磁贴没有底板，必须给足存在感 */
 .dock-tile:hover {
-  transform: translateY(-1px);
-  background: linear-gradient(145deg, #4a4e5a, #353840);
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.1),
+    0 10px 26px -8px rgba(147, 166, 255, 0.55);
+}
+
+.dock-tile:focus-visible {
+  box-shadow: var(--ring);
 }
 
 .dock-tile:not(.dock-tile-more):active {
-  transform: translateY(0);
+  transition-duration: 90ms;
+  transform: translateY(0) scale(calc(var(--s, 1) * 0.93));
+}
+
+/* 图标与磁贴盒边的内边距 11px/边（74 - 52）；hover 光环时此距离即呼吸感 */
+.dock-tile-img {
+  position: relative;
+  z-index: 1;
+  width: 52px;
+  height: 52px;
+  border-radius: var(--r-sm);
+  object-fit: contain;
+  pointer-events: none;
 }
 
 .dock-tile-initial {
+  position: relative;
+  z-index: 1;
   font-weight: 600;
-  font-size: 1.05rem;
+  font-size: 32px;
+  color: var(--text-1);
 }
 
-.dock-tile-img {
-  width: 32px;
-  height: 32px;
-  border-radius: 8px;
-  object-fit: cover;
-  pointer-events: none;
-}
+/* ---------- 移除角标 ---------- */
 
 .dock-tile-remove {
   position: absolute;
   top: -4px;
   right: -4px;
-  width: 18px;
-  height: 18px;
+  z-index: 3;
+  width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
   border-radius: 50%;
-  background: #c94c4c;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: rgba(242, 120, 127, 0.9);
   color: #fff;
-  font-size: 12px;
-  line-height: 16px;
-  text-align: center;
   opacity: 0;
-  transition: opacity 0.12s ease;
-  cursor: pointer;
-  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.35);
+  transform: scale(0.6);
+  transition:
+    opacity var(--t2) var(--e-out),
+    transform var(--t2) var(--e-spring),
+    background var(--t1) ease;
+  box-shadow: 0 2px 8px rgba(4, 6, 12, 0.5);
 }
 
-.dock-tile:hover .dock-tile-remove {
+.dock-tile:hover .dock-tile-remove,
+.dock-tile:focus-within .dock-tile-remove {
   opacity: 1;
+  transform: scale(1);
 }
+
+.dock-tile-remove:hover {
+  background: #ff8b91;
+}
+
+/* ---------- 「全部应用」入口：主操作，轻拟态白底 ---------- */
 
 .dock-tile-more {
   cursor: pointer;
   -webkit-user-drag: none;
-  background: linear-gradient(145deg, #2f4a6f, #243652);
-  font-size: 1.35rem;
-  line-height: 1;
-  letter-spacing: 0;
+  /* 比应用磁贴（74）小一圈；grid 居中保证图案上下左右居中 */
+  width: 60px;
+  height: 60px;
+  display: grid;
+  place-items: center;
+  /* 底对齐时按钮中心比 74 磁贴低 (74-60)/2=7px，抬升 7px 与图标中心齐平 */
+  margin-bottom: 7px;
+  color: #2b3140;
+  background: #ffffff;
+  /* 多层内阴影凹陷拟态（光源左上）：
+     深主内阴影(右下) + 扩散副层 + 双层内反光(左上) + 边缘微描线 */
+  box-shadow:
+    inset 7px 9px 16px -3px rgba(8, 12, 26, 0.34),
+    inset 3px 4px 8px rgba(8, 12, 26, 0.13),
+    inset -4px -5px 12px rgba(255, 255, 255, 0.95),
+    inset -1px -2px 4px rgba(255, 255, 255, 0.8),
+    inset 0 0 0 1px rgba(8, 12, 26, 0.05);
 }
 
 .dock-tile-more:hover {
-  background: linear-gradient(145deg, #3a5c8a, #2c4266);
+  background: #f7f9fc;
+  box-shadow:
+    inset 8px 10px 18px -3px rgba(8, 12, 26, 0.4),
+    inset 4px 5px 9px rgba(8, 12, 26, 0.16),
+    inset -4px -5px 12px rgba(255, 255, 255, 0.95),
+    inset -1px -2px 4px rgba(255, 255, 255, 0.8),
+    inset 0 0 0 1px rgba(8, 12, 26, 0.07);
+}
+
+.dock-tile-more:active {
+  background: #eef1f6;
+  box-shadow:
+    inset 3px 4px 8px rgba(8, 12, 26, 0.2),
+    inset 1px 2px 4px rgba(8, 12, 26, 0.1),
+    inset -2px -2px 5px rgba(255, 255, 255, 0.85),
+    inset 0 0 0 1px rgba(8, 12, 26, 0.06);
+}
+
+/* ---------- 拖拽与启动反馈 ---------- */
+
+.dock-tile.dragging {
+  opacity: 0.35;
+  filter: saturate(0.4);
+}
+
+.dock-tile.drag-over::before {
+  content: "";
+  position: absolute;
+  left: -5px;
+  top: 8px;
+  bottom: 8px;
+  width: 2px;
+  border-radius: 2px;
+  background: var(--accent);
+  box-shadow: 0 0 10px var(--accent-glow);
+}
+
+.dock-tile.launching::before {
+  content: "";
+  position: absolute;
+  inset: -4px;
+  z-index: 2;
+  border-radius: calc(var(--r-lg) + 4px);
+  border: 2px solid var(--accent);
+  animation: pulse-ring 560ms var(--e-out) forwards;
+  pointer-events: none;
+}
+
+.dock-tile.launching .dock-tile-img,
+.dock-tile.launching .dock-tile-initial {
+  animation: tile-launch 420ms var(--e-spring);
+}
+
+@keyframes tile-launch {
+  0% {
+    transform: scale(1);
+  }
+  45% {
+    transform: scale(1.18);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+/* ---------- 加载态 ---------- */
+
+.dock-loading {
+  display: grid;
+  place-items: center;
 }

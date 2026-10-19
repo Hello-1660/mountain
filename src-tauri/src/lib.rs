@@ -26,6 +26,9 @@ use uuid::Uuid;
 pub struct AppStore {
     pub dock: Vec<DockItem>,
     pub groups: Vec<AppGroup>,
+    /// 应用路径（小写）→ 用户自定义别名；为空表示用扫描到的名称
+    #[serde(default)]
+    pub aliases: HashMap<String, String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -69,6 +72,10 @@ pub struct AppCatalogDto {
     #[serde(default)]
     pub apps: Vec<ScannedApp>,
     pub scanned_at: Option<i64>,
+    /// 用户移除过的应用路径（小写）；重新扫描时不再出现，防止"移除后又回来"。
+    /// 若用户「手动添加」同一路径，则视为恢复，从黑名单移除。
+    #[serde(default)]
+    pub removed: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -195,10 +202,198 @@ fn now_unix_ms() -> i64 {
         .unwrap_or(0)
 }
 
+/// 缓存文件名带算法版本：升级提取算法（v1 的 32×32 太糊）后旧缓存自动失效重新提取
 fn exe_icon_cache_name(exe_path: &str) -> String {
     let digest = Sha256::digest(exe_path.to_lowercase().as_bytes());
-    format!("{digest:x}.png")
+    format!("{digest:x}.v2.png")
 }
+
+/// 读 PNG 的 IHDR 拿宽高；解析失败或尺寸低于 `min` 视为需要重提。
+/// 用于把早期回退路径产出的 32×32 缓存自动升级（避免全量缓存失效）。
+fn png_dimensions_at_least(path: &std::path::Path, min: u32) -> bool {
+    use std::io::Read;
+    let Ok(mut f) = std::fs::File::open(path) else {
+        return false;
+    };
+    let mut head = [0u8; 24];
+    if f.read_exact(&mut head).is_err() {
+        return false;
+    }
+    // PNG 签名 8 字节 + "IHDR" 4 字节 + 宽高各 4 字节（大端）
+    if &head[..8] != b"\x89PNG\r\n\x1a\n" || &head[12..16] != b"IHDR" {
+        return false;
+    }
+    let w = u32::from_be_bytes([head[16], head[17], head[18], head[19]]);
+    let h = u32::from_be_bytes([head[20], head[21], head[22], head[23]]);
+    w >= min && h >= min
+}
+
+/// 高分辨率图标提取用的 C# 片段：
+/// `System.Drawing.Icon.ExtractAssociatedIcon` 只给 32×32，放大后会糊；
+/// `PrivateExtractIcons` 能拿到 exe 内嵌的最大帧（常见 256×256）。
+#[cfg(target_os = "windows")]
+const ICON_EXTRACTOR_CS: &str = r#"
+using System;
+using System.Drawing;
+using System.Drawing.Imaging;
+using System.Drawing.Drawing2D;
+using System.Runtime.InteropServices;
+
+public static class MtIconExtractor
+{
+    [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern int PrivateExtractIcons(
+        string file, int index, int cx, int cy, IntPtr[] phicon, IntPtr[] piconid, int nIcons, int flags);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern bool DestroyIcon(IntPtr hIcon);
+
+    // ---- IShellItemImageFactory：Explorer 显示文件图标用的同一来源 ----
+    // 对 PE 资源里没有图标组的 exe（Node/Electron 封装壳、资源被剥离的工具），
+    // PrivateExtractIcons 全尺寸失败，用这个拿 Shell 缓存的最佳图标。
+    [StructLayout(LayoutKind.Sequential)]
+    private struct SIZE { public int cx; public int cy; }
+
+    [Flags]
+    private enum SIIGBF : uint { SIIGBF_BIGGERSIZEOK = 0x00000001 }
+
+    [ComImport, Guid("bcc18b79-ba16-442f-80c4-8a59c30c463b"),
+     InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    private interface IShellItemImageFactory
+    {
+        // 注意：SIZE 必须按值传递。PowerShell 内联编译的 C#（CodeDom）对
+        // `ref struct` 的 COM marshaling 有缺陷，会抛 ArgumentException；
+        // [in] 结构体传值与 ref [in] 在 COM 层等价。
+        void GetImage(SIZE size, SIIGBF flags, out IntPtr phbm);
+    }
+
+    [DllImport("shell32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern int SHCreateItemFromParsingName(
+        [MarshalAs(UnmanagedType.LPWStr)] string pszPath,
+        IntPtr pbc,
+        [In] ref Guid riid,
+        [Out, MarshalAs(UnmanagedType.Interface)] out IShellItemImageFactory ppv);
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct BITMAP
+    {
+        public int bmType; public int bmWidth; public int bmHeight;
+        public int bmWidthBytes; public ushort bmPlanes; public ushort bmBitsPixel;
+        public IntPtr bmBits;
+    }
+
+    [DllImport("gdi32.dll", SetLastError = true)]
+    private static extern bool DeleteObject(IntPtr hObject);
+
+    [DllImport("gdi32.dll")]
+    private static extern int GetObject(IntPtr h, int c, ref BITMAP bmp);
+
+    /// 从 HBITMAP 构造保 alpha 的位图：Shell 返回的是 32bpp PARGB（预乘），
+    /// Bitmap.FromHbitmap 会丢 alpha，这里手动反预乘。
+    private static Bitmap FromHbitmapWithAlpha(IntPtr hbm)
+    {
+        BITMAP bm = new BITMAP();
+        GetObject(hbm, Marshal.SizeOf(typeof(BITMAP)), ref bm);
+        using (Bitmap src = new Bitmap(bm.bmWidth, bm.bmHeight, bm.bmWidthBytes,
+                   PixelFormat.Format32bppPArgb, bm.bmBits))
+        {
+            Bitmap dst = new Bitmap(bm.bmWidth, bm.bmHeight, PixelFormat.Format32bppArgb);
+            for (int y = 0; y < bm.bmHeight; y++)
+            {
+                for (int x = 0; x < bm.bmWidth; x++)
+                {
+                    Color p = src.GetPixel(x, y);
+                    if (p.A == 0) { dst.SetPixel(x, y, Color.Transparent); continue; }
+                    int a = p.A;
+                    dst.SetPixel(x, y, Color.FromArgb(a,
+                        Math.Min(255, p.R * 255 / a),
+                        Math.Min(255, p.G * 255 / a),
+                        Math.Min(255, p.B * 255 / a)));
+                }
+            }
+            return dst;
+        }
+    }
+
+    /// 成功返回 1，失败返回 0
+    public static int SaveShell(string file, string outPath, int size)
+    {
+        Guid iid = new Guid("bcc18b79-ba16-442f-80c4-8a59c30c463b");
+        IShellItemImageFactory factory;
+        int hr = SHCreateItemFromParsingName(file, IntPtr.Zero, ref iid, out factory);
+        if (hr != 0) return -10;
+        try
+        {
+            SIZE sz;
+            sz.cx = size; sz.cy = size;
+            IntPtr hbm;
+            factory.GetImage(sz, SIIGBF.SIIGBF_BIGGERSIZEOK, out hbm);
+            if (hbm == IntPtr.Zero) return -11;
+            try
+            {
+                using (Bitmap bmp = FromHbitmapWithAlpha(hbm))
+                {
+                    bmp.Save(outPath, ImageFormat.Png);
+                }
+                return 1;
+            }
+            finally { DeleteObject(hbm); }
+        }
+        catch { return -12; }
+        finally { try { Marshal.ReleaseComObject(factory); } catch { } }
+    }
+
+    /// 成功返回 1，失败返回 0；< 0 表示具体失败原因，便于排查
+    public static int Save(string file, string outPath, int size)
+    {
+        IntPtr[] hIcon = new IntPtr[1];
+        IntPtr[] iconId = new IntPtr[1];
+        int n = 0;
+        try { n = PrivateExtractIcons(file, 0, size, size, hIcon, iconId, 1, 0); }
+        catch { return -1; }
+        if (n <= 0 || hIcon[0] == IntPtr.Zero) return -2;
+        try
+        {
+            // FromHandle 得到的 Icon 在 DestroyIcon 后失效，先 Clone
+            using (Icon ic = (Icon)Icon.FromHandle(hIcon[0]).Clone())
+            {
+                // 小帧（应用图标组本身只有 32×32 的，如 appverif/nvm/ollama）
+                // 前置用高质量 Bicubic 放大到 128：浏览器/hover 缩放就不再二次插值，
+                // 边缘比"32 纹理被拉伸"干净得多
+                int outSize = ic.Width >= 128 ? ic.Width : 128;
+                using (Bitmap bmp = new Bitmap(outSize, outSize, PixelFormat.Format32bppArgb))
+                {
+                    using (Graphics g = Graphics.FromImage(bmp))
+                    {
+                        g.Clear(Color.Transparent);
+                        g.InterpolationMode = InterpolationMode.HighQualityBicubic;
+                        g.PixelOffsetMode = PixelOffsetMode.HighQuality;
+                        g.DrawIcon(ic, new Rectangle(0, 0, outSize, outSize));
+                    }
+                    bmp.Save(outPath, ImageFormat.Png);
+                }
+            }
+            return 1;
+        }
+        catch { return -3; }
+        finally { DestroyIcon(hIcon[0]); }
+    }
+
+    /// 逐级回退取最大可用帧：不少 exe 图标组没有 256 帧（只有 48/32），
+    /// 固定请求 256 会失败并回退到 32×32 的系统关联图标，显示即模糊。
+    /// 全部尺寸失败再用 Shell 图标工厂兜底（PE 无图标组的封装壳程序）。
+    /// 返回 1 表示成功写出；0 表示所有来源都失败。
+    public static int SaveBest(string file, string outPath)
+    {
+        int[] sizes = { 256, 128, 64, 48 };
+        foreach (int sz in sizes)
+        {
+            if (Save(file, outPath, sz) == 1) return 1;
+        }
+        return SaveShell(file, outPath, 256);
+    }
+}
+"#;
 
 #[cfg(target_os = "windows")]
 fn extract_exe_icon_png(exe: &Path, out: &Path) -> Result<(), String> {
@@ -206,25 +401,58 @@ fn extract_exe_icon_png(exe: &Path, out: &Path) -> Result<(), String> {
     let out_s = out.to_string_lossy();
     let exe_b64 = STANDARD.encode(exe_s.as_bytes());
     let out_b64 = STANDARD.encode(out_s.as_bytes());
+    let cs_b64 = STANDARD.encode(ICON_EXTRACTOR_CS.as_bytes());
     let script = format!(
         r#"
 $ErrorActionPreference = 'Stop'
 try {{
   $exe = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('{exe_b64}'))
   $out = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('{out_b64}'))
+  $cs  = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('{cs_b64}'))
   if (-not (Test-Path -LiteralPath $exe)) {{ exit 2 }}
   $dir = Split-Path -Parent $out
   if (-not (Test-Path -LiteralPath $dir)) {{ New-Item -ItemType Directory -Path $dir -Force | Out-Null }}
   Add-Type -AssemblyName System.Drawing
-  $icon = [System.Drawing.Icon]::ExtractAssociatedIcon($exe)
-  if ($null -eq $icon) {{ exit 1 }}
-  $bmp = $null
-  try {{
-    $bmp = $icon.ToBitmap()
-    $bmp.Save($out, [System.Drawing.Imaging.ImageFormat]::Png)
-  }} finally {{
-    if ($null -ne $bmp) {{ $bmp.Dispose() }}
-    $icon.Dispose()
+
+  # 快捷方式本身没有高分辨率图标，先解析到真实目标
+  if ($exe.ToLower().EndsWith('.lnk')) {{
+    try {{
+      $ws = New-Object -ComObject WScript.Shell
+      $target = $ws.CreateShortcut($exe).TargetPath
+      if ($target -and (Test-Path -LiteralPath $target)) {{ $exe = $target }}
+    }} catch {{ }}
+  }}
+
+  # 优先高分辨率（256×256）；C# 编译结果缓存成 DLL，避免每个应用都编译一次
+  # DLL 名带提取器版本：改过 C# 后旧 DLL 自动失效重新编译
+  $saved = $false
+  $dll = Join-Path $env:TEMP 'mountain-icon-extractor.v3.dll'
+  $loaded = $false
+  if (-not (Test-Path -LiteralPath $dll)) {{
+    try {{ Add-Type -TypeDefinition $cs -ReferencedAssemblies System.Drawing -OutputAssembly $dll -ErrorAction Stop }} catch {{ }}
+  }}
+  if (Test-Path -LiteralPath $dll) {{
+    try {{ Add-Type -Path $dll -ErrorAction Stop; $loaded = $true }} catch {{ }}
+  }}
+  if (-not $loaded) {{
+    try {{ Add-Type -TypeDefinition $cs -ReferencedAssemblies System.Drawing -ErrorAction Stop; $loaded = $true }} catch {{ }}
+  }}
+  if ($loaded) {{
+    try {{ $saved = ([MtIconExtractor]::SaveBest($exe, $out) -eq 1) }} catch {{ $saved = $false }}
+  }}
+
+  # 回退：系统关联图标（仅 32×32，但保证有图）
+  if (-not $saved) {{
+    $icon = [System.Drawing.Icon]::ExtractAssociatedIcon($exe)
+    if ($null -eq $icon) {{ exit 1 }}
+    $bmp = $null
+    try {{
+      $bmp = $icon.ToBitmap()
+      $bmp.Save($out, [System.Drawing.Imaging.ImageFormat]::Png)
+    }} finally {{
+      if ($null -ne $bmp) {{ $bmp.Dispose() }}
+      $icon.Dispose()
+    }}
   }}
 }} catch {{ exit 3 }}
 "#
@@ -277,7 +505,9 @@ fn ensure_icon_for_exe(app: &tauri::AppHandle, exe_path: &str) -> Result<Option<
             || out
                 .metadata()
                 .map(|m| m.len() == 0)
-                .unwrap_or(true);
+                .unwrap_or(true)
+            // 早期回退路径产出的小尺寸缓存（32×32）也重提：算法已支持逐级回退
+            || (out.exists() && !png_dimensions_at_least(&out, 64));
         if need_extract {
             let _ = extract_exe_icon_png(p, &out);
         }
@@ -331,6 +561,7 @@ fn load_app_catalog(app: tauri::AppHandle) -> Result<AppCatalogDto, String> {
         return Ok(AppCatalogDto {
             apps: vec![],
             scanned_at: None,
+            removed: vec![],
         });
     }
     let raw = fs::read_to_string(&p).map_err(|e| e.to_string())?;
@@ -345,8 +576,10 @@ fn add_manual_executable(app: tauri::AppHandle, path: String) -> Result<AppCatal
         return Err("路径为空".into());
     }
     let pb = Path::new(&path);
-    if !pb.is_file() {
-        return Err("不是有效的可执行文件".into());
+    // 允许任意类型的可执行体：脚本、快捷方式(.lnk)、符号/硬链接等。
+    // 用 exists() 而非 is_file()：部分链接类型下 is_file() 会误判为 false。
+    if !pb.exists() {
+        return Err("路径不存在".into());
     }
     let mut dto = load_app_catalog(app.clone())?;
     if dto
@@ -356,6 +589,9 @@ fn add_manual_executable(app: tauri::AppHandle, path: String) -> Result<AppCatal
     {
         return Ok(dto);
     }
+    // 手动添加即明确意图：若此前移除过，从黑名单恢复，否则重新扫描会把它挡掉
+    let key = path.trim().to_lowercase();
+    dto.removed.retain(|r| r != &key);
     let name = pb
         .file_stem()
         .and_then(|s| s.to_str())
@@ -379,6 +615,33 @@ fn add_manual_executable(app: tauri::AppHandle, path: String) -> Result<AppCatal
         .apps
         .sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
     save_catalog(&app, &dto)?;
+    Ok(dto)
+}
+
+/// 从启动台移除应用：目录删除 + 移除黑名单（重新扫描不再拉回）+
+/// 同步清理便捷栏 / 分组 / 别名引用，并广播 store 变化给 dock 与库窗口。
+/// 后悔药：「手动添加」同一路径即恢复。
+#[tauri::command]
+fn remove_app(app: tauri::AppHandle, path: String) -> Result<AppCatalogDto, String> {
+    let key = path.trim().to_lowercase();
+    if key.is_empty() {
+        return Err("路径为空".into());
+    }
+    let mut dto = load_app_catalog(app.clone())?;
+    dto.apps.retain(|a| !a.path.eq_ignore_ascii_case(&path));
+    if !dto.removed.iter().any(|r| r == &key) {
+        dto.removed.push(key.clone());
+    }
+    save_catalog(&app, &dto)?;
+
+    // store 清理：dock 钉选、各分组引用、别名
+    let mut store = load_store(app.clone())?;
+    store.dock.retain(|d| !d.path.eq_ignore_ascii_case(&path));
+    for g in &mut store.groups {
+        g.paths.retain(|p| !p.eq_ignore_ascii_case(&path));
+    }
+    store.aliases.remove(&key);
+    save_store(app, store)?;
     Ok(dto)
 }
 
@@ -483,11 +746,18 @@ fn refresh_catalog_blocking(app: tauri::AppHandle) -> Result<AppCatalogDto, Stri
     let prev = load_app_catalog(app.clone()).unwrap_or(AppCatalogDto {
         apps: vec![],
         scanned_at: None,
+        removed: vec![],
     });
+    // 移除黑名单：用户手动移除过的应用，重新扫描不再拉回
+    let removed: HashSet<String> = prev.removed.iter().cloned().collect();
     let mut apps = scan_start_menu_collect()?;
+    apps.retain(|a| !removed.contains(&a.path.to_lowercase()));
     let mut paths: HashSet<String> = apps.iter().map(|a| a.path.to_lowercase()).collect();
     for a in &prev.apps {
-        if a.manual && !paths.contains(&a.path.to_lowercase()) {
+        if a.manual
+            && !paths.contains(&a.path.to_lowercase())
+            && !removed.contains(&a.path.to_lowercase())
+        {
             paths.insert(a.path.to_lowercase());
             let mut m = a.clone();
             m.icon_path = ensure_icon_for_exe(&app, &m.path).unwrap_or(None);
@@ -501,6 +771,7 @@ fn refresh_catalog_blocking(app: tauri::AppHandle) -> Result<AppCatalogDto, Stri
     let dto = AppCatalogDto {
         scanned_at: Some(now_unix_ms()),
         apps,
+        removed: prev.removed,
     };
     save_catalog(&app, &dto)?;
     Ok(dto)
@@ -767,6 +1038,63 @@ fn check_github_release() -> Result<UpdateCheckDto, String> {
     Ok(out)
 }
 
+/// dock 窗口固定高度（px）。几何精算值：
+/// 磁贴 74 + hover 放大 1.28×（94.72）+ 上移 5 + items 底留 8 = 111.72
+/// （紧凑布局：磁贴间距 13px，放大边缘与相邻图标留 ~2.6px）
+/// → items 113；strip padding 10 → 123；shell 底留 8 → 131，取 132 留 1px 抗锯齿余量。
+const DOCK_WINDOW_HEIGHT: f64 = 136.0;
+
+/// dock 内容与窗口边缘的水平余量合计（px）：
+/// 两侧把手 28×2 + strip padding 5×2 + shell padding 10×2 = 86
+const DOCK_CHROME_PADDING_X: f64 = 86.0;
+
+/// 便捷栏宽度自适应：按前端测量的**内容真实宽度**（items.scrollWidth，
+/// 不受窗口压缩影响，避免"窗口压内容→测不到真实宽→永远撑不大"的死锁）
+/// 设置窗口尺寸；高度恒为 DOCK_WINDOW_HEIGHT。
+/// 位置保持：宽度未变则完全不动窗口；宽度变化时以原窗口中心对称伸缩，
+/// 不强制回屏幕中心——用户拖动过的位置不会因增删应用被重置。
+#[tauri::command]
+async fn fit_dock_size(app: tauri::AppHandle, content_width: f64) -> Result<(), String> {
+    let w = app
+        .get_webview_window("dock")
+        .ok_or_else(|| "dock 窗口不存在".to_string())?;
+    let monitor = w.current_monitor().map_err(|e| e.to_string())?;
+    let (mw, _mh) = monitor
+        .map(|m| {
+            let s = m.size();
+            (s.width as f64, s.height as f64)
+        })
+        .unwrap_or((1920.0, 1080.0));
+    let width = (content_width + DOCK_CHROME_PADDING_X)
+        .round()
+        .max(320.0)
+        .min(mw - 80.0);
+
+    // 统一到物理像素：outer_size/outer_position 与 set_size/set_position 都在物理空间
+    let scale = w.scale_factor().unwrap_or(1.0).max(0.5);
+    let new_w_phys = (width * scale).round() as i32;
+    let new_h_phys = (DOCK_WINDOW_HEIGHT * scale).round() as i32;
+    let screen_w_phys = (mw * scale).round() as i32;
+
+    let old_w_phys = w.outer_size().ok().map(|s| s.width as i32);
+    let old_pos = w.outer_position().ok();
+
+    w.set_size(tauri::PhysicalSize::new(new_w_phys, new_h_phys))
+        .map_err(|e| e.to_string())?;
+
+    if let (Some(ow), Some(op)) = (old_w_phys, old_pos) {
+        let dw = new_w_phys - ow;
+        if dw != 0 {
+            // 以原窗口中心为基准对称伸缩：栏体视觉位置不跳
+            let nx = (op.x as i32 - dw / 2)
+                .max(0)
+                .min((screen_w_phys - new_w_phys).max(0));
+            let _ = w.set_position(tauri::PhysicalPosition::new(nx, op.y as i32));
+        }
+    }
+    Ok(())
+}
+
 /// 异步打开库窗口：避免在 Windows/WebView2 上通过同步 command 操作窗口时卡住或无效；
 /// 若启动时未注册到管理器，则按配置即时创建。
 #[tauri::command]
@@ -793,13 +1121,20 @@ async fn show_library_window(app: tauri::AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+/// 手动添加：允许任意类型的可执行文件 / 脚本 / 链接文件（.lnk、硬链接、符号链接等），
+/// 也允许「所有文件」以便选择没有常见扩展名的可执行体。
+const PICKABLE_EXTENSIONS: &[&str] = &[
+    "exe", "msi", "bat", "cmd", "com", "scr", "ps1", "vbs", "js", "wsf", "lnk", "url", "py", "pyw",
+    "jar", "appref-ms", "ahk", "sh",
+];
 #[tauri::command]
 async fn pick_executable(app: tauri::AppHandle) -> Result<Option<String>, String> {
     use tauri_plugin_dialog::DialogExt;
     let file = app
         .dialog()
         .file()
-        .add_filter("可执行文件", &["exe", "msi", "bat", "cmd"])
+        .add_filter("可执行文件 / 脚本 / 链接", PICKABLE_EXTENSIONS)
+        .add_filter("所有文件", &["*"])
         .blocking_pick_file();
     Ok(file.map(|f| f.to_string()))
 }
@@ -917,12 +1252,14 @@ pub fn run() {
             launch_app,
             load_app_catalog,
             add_manual_executable,
+            remove_app,
             refresh_app_catalog,
             read_icon_data_url,
             pick_executable,
             show_library_window,
             load_usage_snapshot,
             check_github_release,
+            fit_dock_size,
         ])
         .build(context)
         .expect("error while building tauri application");

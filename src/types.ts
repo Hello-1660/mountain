@@ -23,6 +23,28 @@ export interface AppGroup {
 export interface AppStore {
   dock: DockItem[];
   groups: AppGroup[];
+  /** 应用路径（小写）→ 用户自定义别名 */
+  aliases?: Record<string, string>;
+}
+
+/** 取别名，未设置则返回原名 */
+export function aliasOf(
+  store: Pick<AppStore, "aliases"> | null | undefined,
+  path: string,
+): string | undefined {
+  const aliases = store?.aliases;
+  if (!aliases) return undefined;
+  const key = path.trim();
+  // 写入时统一小写；同时容忍原始大小写 key（手改 store.json 的旧数据）
+  return aliases[key.toLowerCase()] ?? aliases[key];
+}
+
+export function displayName(
+  store: Pick<AppStore, "aliases"> | null | undefined,
+  path: string,
+  fallback: string,
+): string {
+  return aliasOf(store, path) || fallback;
 }
 
 /** 库界面用：去掉误写入的「便捷启动」伪分组，与 `dock` 一致 */
@@ -47,6 +69,8 @@ export interface ScannedApp {
 export interface AppCatalogDto {
   apps: ScannedApp[];
   scannedAt: number | null;
+  /** 移除黑名单（路径小写）：重新扫描不再出现；手动添加同一路径即恢复 */
+  removed?: string[];
 }
 
 export interface FileDetail {
