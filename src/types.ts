@@ -97,4 +97,6 @@ export interface UpdateCheckDto {
   releaseUrl: string | null;
   releaseNotes: string | null;
   fetchError: string | null;
+  /** 安装包直链（x64 setup.exe），供应用内下载更新 */
+  downloadUrl: string | null;
 }

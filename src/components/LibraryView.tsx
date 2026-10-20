@@ -16,7 +16,7 @@ import Toaster, { useToasts } from "./Toaster";
 import { AmbientBackground, MarkLogo } from "./BrandMark";
 import {
   IconCheck,
-  IconClock,
+  IconChevronDown,
   IconClose,
   IconCopy,
   IconDownload,
@@ -119,6 +119,44 @@ export default function LibraryView() {
   const [scanning, setScanning] = useState(false);
   const [catalogBootstrapping, setCatalogBootstrapping] = useState(true);
   const [query, setQuery] = useState("");
+  /* 搜索域：手动切换搜索范围（默认跟随当前分组；Tab 循环切换）。
+   * 仅在有搜索词时生效——无输入时列表仍浏览当前分组。 */
+  const [searchScope, setSearchScope] = useState<string | "all">("all");
+  const [scopeOpen, setScopeOpen] = useState(false);
+
+  /* ---------- 统一选中模型 ----------
+   * 全界面只有一个「当前选中」变量 sel，可区分分组/应用：
+   *   { kind: "group", id } | { kind: "app", path } | null
+   * 点击、键盘切换都只改这一个变量；分组项与应用项渲染时判断
+   * “sel === 自身”绑定唯一聚焦样式 .is-focused。
+   * 全局 keydown 按 sel.kind 分发：group 走分组快捷键、app 走列表快捷键。
+   * （搜索框独立：自身 focus 样式不变，键盘走 input 的 onKeyDown。） */
+  type Sel = { kind: "group"; id: string } | { kind: "app"; path: string } | null;
+  const [sel, setSel] = useState<Sel>(null);
+
+  const navIds = useMemo(
+    () => [
+      "all",
+      DOCK_GROUP_ID,
+      FREQUENT_GROUP_ID,
+      ...(store?.groups ?? []).map((g) => g.id),
+    ],
+    [store],
+  );
+
+  const selectGroup = useCallback((id: string) => {
+    setSel({ kind: "group", id });
+    setGroupId(id);
+  }, []);
+
+  const selectApp = useCallback(
+    (path: string) => {
+      setSel({ kind: "app", path });
+      setSelectedPath(path);
+    },
+    [],
+  );
+
   /* 打开「全部应用」时默认落在「便捷启动」 */
   const [groupId, setGroupId] = useState<string | "all">(DOCK_GROUP_ID);
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
@@ -140,6 +178,12 @@ export default function LibraryView() {
   });
   const [updateCheck, setUpdateCheck] = useState<UpdateCheckDto | null>(null);
   const [updateBusy, setUpdateBusy] = useState(false);
+  /* 覆盖更新流程：弹窗确认 → 下载安装包 → 静默安装并重启 */
+  const [updatePrompt, setUpdatePrompt] = useState<{
+    version: string;
+    url: string;
+  } | null>(null);
+  const [updateInstalling, setUpdateInstalling] = useState(false);
   const [rowContextMenu, setRowContextMenu] = useState<{
     path: string;
     x: number;
@@ -155,6 +199,25 @@ export default function LibraryView() {
   const navRefs = useRef(new Map<string, HTMLElement>());
   const [indicator, setIndicator] = useState({ y: 0, h: 20, show: false });
   const { toasts, push } = useToasts();
+
+  /* 覆盖更新：下载安装包 → 静默安装并重启（弹窗确认后调用） */
+  const startUpdate = useCallback(async () => {
+    if (!updatePrompt) return;
+    setUpdateInstalling(true);
+    try {
+      push("正在下载更新包…");
+      const setupPath = await invoke<string>("download_update", {
+        url: updatePrompt.url,
+      });
+      push("下载完成，正在重启并安装…");
+      await invoke("apply_update_and_restart", { setupPath });
+      // 正常到不了这里：应用已退出，安装器接管覆盖安装
+    } catch (e) {
+      console.error(String(e));
+      push("更新失败，请重试或到发布页手动下载");
+      setUpdateInstalling(false);
+    }
+  }, [updatePrompt, push]);
 
   const debouncedSave = useRef(
     debounce((s: AppStore) => {
@@ -189,6 +252,19 @@ export default function LibraryView() {
     return () => {
       unlisten?.();
     };
+  }, []);
+
+  /* 屏蔽 WebView 原生右键菜单：启动台的右键交互走自定义菜单
+   *（启动/固定到便捷栏/从启动台移除）。文本输入框豁免——
+   * 原生的复制/粘贴/全选是有用功能，禁用它是缺陷。 */
+  useEffect(() => {
+    const stop = (e: MouseEvent) => {
+      const t = e.target as HTMLElement | null;
+      if (t?.closest("input, textarea, [contenteditable='true']")) return;
+      e.preventDefault();
+    };
+    document.addEventListener("contextmenu", stop);
+    return () => document.removeEventListener("contextmenu", stop);
   }, []);
 
   /* 启动台整体 UI 放大：根元素 zoom（字体/图标/按钮/间距同比缩放）。
@@ -344,26 +420,35 @@ export default function LibraryView() {
     });
   }, [store, scanned]);
 
+  /** 按分组 id 取基础列表（搜索域与视图分组共用） */
+  const listForScope = useCallback(
+    (scopeId: string): ScannedApp[] => {
+      if (scopeId === RECENT_GROUP_ID) {
+        return usage.recentPaths.map((p) => resolvePathToApp(p));
+      }
+      if (scopeId === FREQUENT_GROUP_ID) {
+        return usage.frequentPaths.map((e) => resolvePathToApp(e.path));
+      }
+      if (scopeId === DOCK_GROUP_ID && store) {
+        return dockAppsList;
+      }
+      if (scopeId !== "all" && store) {
+        const g = store.groups.find((x) => x.id === scopeId);
+        if (g) {
+          const set = new Set(g.paths.map((p) => p.toLowerCase()));
+          return scanned.filter((a) => set.has(a.path.toLowerCase()));
+        }
+        return scanned;
+      }
+      return scanned;
+    },
+    [usage, store, dockAppsList, scanned, resolvePathToApp],
+  );
+
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
-    let list: ScannedApp[];
-    if (groupId === RECENT_GROUP_ID) {
-      list = usage.recentPaths.map((p) => resolvePathToApp(p));
-    } else if (groupId === FREQUENT_GROUP_ID) {
-      list = usage.frequentPaths.map((e) => resolvePathToApp(e.path));
-    } else if (groupId === DOCK_GROUP_ID && store) {
-      list = dockAppsList;
-    } else if (groupId !== "all" && store) {
-      const g = store.groups.find((x) => x.id === groupId);
-      if (g) {
-        const set = new Set(g.paths.map((p) => p.toLowerCase()));
-        list = scanned.filter((a) => set.has(a.path.toLowerCase()));
-      } else {
-        list = scanned;
-      }
-    } else {
-      list = scanned;
-    }
+    // 有搜索词 → 按搜索域过滤；无输入 → 浏览当前分组
+    const list = listForScope(q ? searchScope : groupId);
     if (!q) return list;
     return list.filter((a) => {
       const alias = aliasOf(store, a.path) ?? "";
@@ -374,14 +459,11 @@ export default function LibraryView() {
       );
     });
   }, [
-    scanned,
     query,
     groupId,
+    searchScope,
+    listForScope,
     store,
-    dockAppsList,
-    usage.recentPaths,
-    usage.frequentPaths,
-    resolvePathToApp,
   ]);
 
   const frequentCount = useMemo(() => {
@@ -665,6 +747,28 @@ export default function LibraryView() {
     if (!rowContextMenu) setConfirmRemovePath(null);
   }, [rowContextMenu]);
 
+  // 搜索域下拉：点外部 / Esc 关闭
+  useEffect(() => {
+    if (!scopeOpen) return;
+    const onDown = (e: MouseEvent) => {
+      const t = e.target as HTMLElement | null;
+      if (t?.closest(".lib-scope-wrap")) return;
+      setScopeOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setScopeOpen(false);
+    };
+    const timer = window.setTimeout(() => {
+      window.addEventListener("mousedown", onDown, true);
+    }, 0);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.clearTimeout(timer);
+      window.removeEventListener("mousedown", onDown, true);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [scopeOpen]);
+
   useEffect(() => {
     if (!rowContextMenu) return;
     const onDown = (e: MouseEvent) => {
@@ -816,33 +920,16 @@ export default function LibraryView() {
         releaseUrl: null,
         releaseNotes: null,
         fetchError: String(e),
+        downloadUrl: null,
       });
     } finally {
       setUpdateBusy(false);
     }
   }, []);
 
-  const moveSelection = useCallback(
-    (delta: number) => {
-      if (filtered.length === 0) return;
-      const idx = filtered.findIndex(
-        (a) => a.path.toLowerCase() === selectedPath?.toLowerCase(),
-      );
-      const next =
-        idx < 0
-          ? delta > 0
-            ? 0
-            : filtered.length - 1
-          : Math.min(filtered.length - 1, Math.max(0, idx + delta));
-      setSelectedPath(filtered[next].path);
-    },
-    [filtered, selectedPath],
-  );
-
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement | null;
-      const inSearch = target === searchRef.current;
       const isField =
         !!target &&
         (target.tagName === "INPUT" ||
@@ -864,43 +951,129 @@ export default function LibraryView() {
           setSettingsOpen(false);
           return;
         }
+        if (scopeOpen) {
+          setScopeOpen(false);
+          return;
+        }
         if (isField) {
           setQuery("");
           target?.blur();
         }
         return;
       }
-      if (!inSearch) {
-        if (!isField && e.key === "/") {
+      // 输入框豁免：非搜索框的输入框（别名/新分组等）不接管；
+      // 搜索框内只放行 Tab（搜索域切换归 input），↑↓/Enter 走下方
+      // 统一选中分发——否则焦点停在搜索框时 ↑↓ 会反复重置到首/末项。
+      const isSearch = target === searchRef.current;
+      if (isField && !isSearch) return;
+      if (isSearch && (e.key === "Tab" || e.key.length === 1)) return;
+      if (!isField && e.key === "/") {
+        e.preventDefault();
+        searchRef.current?.focus();
+        return;
+      }
+
+      /* ---- 统一选中模型：按 sel.kind 分发快捷键 ---- */
+      const groupIds = navIds;
+      const groupIndexOf = (id: string) => groupIds.indexOf(id);
+      // 分组逻辑
+      if (sel?.kind === "group") {
+        const i = groupIndexOf(sel.id);
+        if (e.key === "ArrowDown") {
           e.preventDefault();
-          searchRef.current?.focus();
+          selectGroup(groupIds[(i + 1) % groupIds.length]);
+          return;
+        }
+        if (e.key === "ArrowUp") {
+          e.preventDefault();
+          selectGroup(groupIds[(i - 1 + groupIds.length) % groupIds.length]);
+          return;
+        }
+        if (e.key === "ArrowRight" || e.key === "Enter") {
+          e.preventDefault();
+          const first = filtered[0];
+          if (first) selectApp(first.path);
+          return;
+        }
+        if (e.key === "Tab") {
+          e.preventDefault();
+          selectGroup(groupIds[(i + (e.shiftKey ? -1 : 1) + groupIds.length) % groupIds.length]);
+          return;
         }
         return;
       }
-      if (e.key === "ArrowDown" || e.key === "ArrowUp") {
-        e.preventDefault();
-        moveSelection(e.key === "ArrowDown" ? 1 : -1);
+      // 应用逻辑
+      if (sel?.kind === "app") {
+        const i = filtered.findIndex((a) => a.path === sel.path);
+        if (e.key === "ArrowDown") {
+          e.preventDefault();
+          const next = filtered[Math.min(i + 1, filtered.length - 1)];
+          if (next) selectApp(next.path);
+          return;
+        }
+        if (e.key === "ArrowUp") {
+          e.preventDefault();
+          if (i <= 0) {
+            // 到头回搜索框（选中清空，保持“一处聚焦”在搜索框）
+            setSel(null);
+            searchRef.current?.focus();
+          } else {
+            selectApp(filtered[i - 1].path);
+          }
+          return;
+        }
+        if (e.key === "ArrowLeft") {
+          e.preventDefault();
+          selectGroup(groupId);
+          return;
+        }
+        if (e.key === "Enter") {
+          e.preventDefault();
+          const a = filtered[i];
+          if (a) launch(a);
+          return;
+        }
+        if (e.key === "Tab") {
+          e.preventDefault();
+          const gi = groupIndexOf(groupId);
+          selectGroup(
+            groupIds[(gi + (e.shiftKey ? -1 : 1) + groupIds.length) % groupIds.length],
+          );
+          return;
+        }
         return;
       }
-      if (e.key === "Enter" && selectedPath) {
+      // 无选中：↑↓ 直接进入应用列表（首项/末项）
+      if (e.key === "ArrowDown" || e.key === "ArrowUp") {
         e.preventDefault();
-        launch(resolvePathToApp(selectedPath));
+        const pick =
+          e.key === "ArrowDown" ? filtered[0] : filtered[filtered.length - 1];
+        if (pick) selectApp(pick.path);
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [
-    moveSelection,
+    sel,
+    filtered,
+    navIds,
+    groupId,
+    selectGroup,
+    selectApp,
     launch,
-    resolvePathToApp,
     settingsOpen,
     rowContextMenu,
-    selectedPath,
+    scopeOpen,
   ]);
 
-  /* 窗口每次拿到焦点（含从 dock 打开「全部应用」）都把光标交给搜索框 */
+  /* 窗口拿到焦点时把光标交给搜索框；但键盘导航中（焦点已落在
+   * 分组栏/应用列表）不抢焦点，否则 ↑↓/Tab 流会被打断。 */
   useEffect(() => {
-    const focusSearch = () => searchRef.current?.focus();
+    const focusSearch = () => {
+      const ae = document.activeElement;
+      if (ae && ae !== document.body && ae !== document.documentElement) return;
+      searchRef.current?.focus();
+    };
     focusSearch();
     const t = window.setTimeout(focusSearch, 120);
     window.addEventListener("focus", focusSearch);
@@ -1025,6 +1198,46 @@ export default function LibraryView() {
     return store?.groups.find((g) => g.id === groupId)?.name ?? "全部应用";
   }, [groupId, store]);
 
+  /* ---------- 搜索域（scope）---------- */
+  const scopeName = useCallback(
+    (id: string) => {
+      if (id === "all") return "全部应用";
+      if (id === DOCK_GROUP_ID) return "便捷启动";
+      if (id === RECENT_GROUP_ID) return "最近使用";
+      if (id === FREQUENT_GROUP_ID) return "启动最多";
+      return store?.groups.find((g) => g.id === id)?.name ?? "全部应用";
+    },
+    [store],
+  );
+
+  const scopeOptions = useMemo(
+    () => [
+      { id: "all", name: "全部应用" },
+      { id: DOCK_GROUP_ID, name: "便捷启动" },
+      { id: RECENT_GROUP_ID, name: "最近使用" },
+      { id: FREQUENT_GROUP_ID, name: "启动最多" },
+      ...(store?.groups ?? []).map((g) => ({ id: g.id, name: g.name })),
+    ],
+    [store],
+  );
+
+  /** Tab 循环切换搜索域（Shift+Tab 反向）；顺序与下拉一致 */
+  const cycleScope = useCallback(
+    (dir: 1 | -1) => {
+      setSearchScope((cur) => {
+        const ids = scopeOptions.map((o) => o.id);
+        const i = ids.indexOf(cur);
+        return ids[(i + dir + ids.length) % ids.length];
+      });
+    },
+    [scopeOptions],
+  );
+
+  // 侧栏切分组时搜索域回到「默认 = 当前分组」
+  useEffect(() => {
+    setSearchScope(groupId);
+  }, [groupId]);
+
   const recentApps = useMemo(
     () => usage.recentPaths.slice(0, 9).map((p) => resolvePathToApp(p)),
     [usage.recentPaths, resolvePathToApp],
@@ -1059,7 +1272,7 @@ export default function LibraryView() {
         : groupId === RECENT_GROUP_ID
           ? "还没有启动记录"
           : groupId === FREQUENT_GROUP_ID
-            ? "还没有常用应用"
+            ? "还没有启动记录"
             : query.trim()
               ? "没有匹配的应用"
               : "这里还没有应用";
@@ -1072,7 +1285,7 @@ export default function LibraryView() {
         : groupId === RECENT_GROUP_ID
           ? "用 Mountain 打开任意应用后，这里会留下记录"
           : groupId === FREQUENT_GROUP_ID
-            ? "多次启动同一个应用后会出现在这里"
+            ? "用 Mountain 启动应用后，这里会按启动次数排序"
             : query.trim()
               ? "换个关键词，或清空搜索看看全部应用"
               : "试试顶部的「重新扫描」或「手动添加」";
@@ -1080,11 +1293,11 @@ export default function LibraryView() {
   /** 网格 / 列表共用的外壳属性 */
   const shell = (app: ScannedApp) => {
     const payload: DragPayload = { kind: "app", path: app.path };
-    const active = selectedPath?.toLowerCase() === app.path.toLowerCase();
+    const focused = sel?.kind === "app" && sel.path === app.path;
     const cls =
       "lib-row-wrap " +
       view +
-      (active ? " active" : "") +
+      (focused ? " is-focused" : "") +
       (dragSort.isDragging(payload) ? " dragging" : "") +
       (dragSort.isTarget(payload) ? " drop-target" : "");
     return {
@@ -1122,12 +1335,56 @@ export default function LibraryView() {
             <div className="lib-search">
               <div className="lib-search-field">
                 <IconSearch size={15} />
+                <div className="lib-scope-wrap">
+                  <button
+                    type="button"
+                    className="lib-scope"
+                    title="搜索范围（Tab / Shift+Tab 切换）"
+                    onClick={() => setScopeOpen((v) => !v)}
+                  >
+                    <span className="lib-scope-name">{scopeName(searchScope)}</span>
+                    <IconChevronDown size={11} />
+                  </button>
+                  {scopeOpen && (
+                    <div className="lib-scope-pop" role="listbox">
+                      {scopeOptions.map((o) => (
+                        <button
+                          key={o.id}
+                          type="button"
+                          role="option"
+                          aria-selected={o.id === searchScope}
+                          className={
+                            "lib-scope-item" +
+                            (o.id === searchScope ? " active" : "")
+                          }
+                          onClick={() => {
+                            setSearchScope(o.id);
+                            setScopeOpen(false);
+                            searchRef.current?.focus();
+                          }}
+                        >
+                          {o.name}
+                          {o.id === searchScope && <IconCheck size={12} />}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
                 <input
                   ref={searchRef}
                   className="lib-search-input"
                   value={query}
                   onChange={(e) => setQuery(e.currentTarget.value)}
-                  placeholder="搜索应用名称或路径…"
+                  onKeyDown={(e) => {
+                    // 仅 Tab（搜索域切换）在输入框内处理；↑↓/Enter 由
+                    // 全局 keydown 按统一选中变量分发（移动/启动）。
+                    if (e.key === "Tab") {
+                      e.preventDefault();
+                      cycleScope(e.shiftKey ? -1 : 1);
+                      setScopeOpen(false);
+                    }
+                  }}
+                  placeholder="搜索应用名称或路径…（Tab 切换搜索范围）"
                   aria-label="搜索应用"
                   spellCheck={false}
                 />
@@ -1235,14 +1492,25 @@ export default function LibraryView() {
                           <p className="lib-warn-text">
                             {updateCheck.fetchError}
                           </p>
-                        ) : updateCheck.hasUpdate && updateCheck.releaseUrl ? (
+                        ) : updateCheck.hasUpdate ? (
                           <button
                             type="button"
                             className="lib-link-button"
-                            onClick={() => void openUrl(updateCheck.releaseUrl!)}
+                            disabled={updateInstalling}
+                            onClick={() => {
+                              const url = updateCheck.downloadUrl;
+                              if (url) {
+                                setUpdatePrompt({
+                                  version: updateCheck.latestVersion ?? "",
+                                  url,
+                                });
+                              } else if (updateCheck.releaseUrl) {
+                                void openUrl(updateCheck.releaseUrl);
+                              }
+                            }}
                           >
                             <IconDownload size={13} />
-                            有新版本 {updateCheck.latestVersion}
+                            有新版本 {updateCheck.latestVersion} · 点击更新
                           </button>
                         ) : (
                           <p className="lib-setting-hint">
@@ -1284,8 +1552,11 @@ export default function LibraryView() {
                   if (el) navRefs.current.set("all", el);
                   else navRefs.current.delete("all");
                 }}
-                className={"lib-nav-item" + (groupId === "all" ? " active" : "")}
-                onClick={() => setGroupId("all")}
+                className={
+                  "lib-nav-item" +
+                  (sel?.kind === "group" && sel.id === "all" ? " is-focused" : "")
+                }
+                onClick={() => selectGroup("all")}
               >
                 <IconLayers size={15} />
                 <span className="lib-nav-label">全部应用</span>
@@ -1299,9 +1570,11 @@ export default function LibraryView() {
                   else navRefs.current.delete(DOCK_GROUP_ID);
                 }}
                 className={
-                  "lib-nav-item" + (groupId === DOCK_GROUP_ID ? " active" : "")
+                  "lib-nav-item" +
+                  (sel?.kind === "group" && sel.id === DOCK_GROUP_ID ? " is-focused"
+                    : "")
                 }
-                onClick={() => setGroupId(DOCK_GROUP_ID)}
+                onClick={() => selectGroup(DOCK_GROUP_ID)}
                 title="与桌面便捷栏同步"
               >
                 <IconPin size={15} />
@@ -1312,19 +1585,22 @@ export default function LibraryView() {
               <button
                 type="button"
                 ref={(el) => {
-                  if (el) navRefs.current.set(RECENT_GROUP_ID, el);
-                  else navRefs.current.delete(RECENT_GROUP_ID);
+                  if (el) navRefs.current.set(FREQUENT_GROUP_ID, el);
+                  else navRefs.current.delete(FREQUENT_GROUP_ID);
                 }}
                 className={
                   "lib-nav-item" +
-                  (groupId === RECENT_GROUP_ID ? " active" : "")
+                  (sel?.kind === "group" && sel.id === FREQUENT_GROUP_ID ? " is-focused"
+                    : "")
                 }
-                onClick={() => setGroupId(RECENT_GROUP_ID)}
-                title="按最后一次从这里启动的时间排序"
+                onClick={() => selectGroup(FREQUENT_GROUP_ID)}
+                title="按累计启动次数排序"
               >
-                <IconClock size={15} />
-                <span className="lib-nav-label">最近使用</span>
-                <span className="lib-nav-count">{usage.recentPaths.length}</span>
+                <IconFlame size={15} />
+                <span className="lib-nav-label">启动最多</span>
+                <span className="lib-nav-count">
+                  {usage.frequentPaths.length}
+                </span>
               </button>
 
               {store.groups.map((g) => {
@@ -1352,7 +1628,8 @@ export default function LibraryView() {
                     }}
                     className={
                       "lib-group-row" +
-                      (groupId === g.id ? " active" : "") +
+                      (sel?.kind === "group" && sel.id === g.id ? " is-focused"
+                        : "") +
                       (dragSort.isDragging(groupPayload) ? " dragging" : "") +
                       (dragSort.isTarget(groupPayload) ? " drop-target" : "")
                     }
@@ -1362,7 +1639,7 @@ export default function LibraryView() {
                     <button
                       type="button"
                       className="lib-group-main"
-                      onClick={() => setGroupId(g.id)}
+                      onClick={() => selectGroup(g.id)}
                       onDoubleClick={() => {
                         setRenamingGroupId(g.id);
                         setRenameDraft(g.name);
@@ -1430,26 +1707,6 @@ export default function LibraryView() {
                   </div>
                 );
               })}
-
-              <button
-                type="button"
-                ref={(el) => {
-                  if (el) navRefs.current.set(FREQUENT_GROUP_ID, el);
-                  else navRefs.current.delete(FREQUENT_GROUP_ID);
-                }}
-                className={
-                  "lib-nav-item" +
-                  (groupId === FREQUENT_GROUP_ID ? " active" : "")
-                }
-                onClick={() => setGroupId(FREQUENT_GROUP_ID)}
-                title="按累计启动次数排序"
-              >
-                <IconFlame size={15} />
-                <span className="lib-nav-label">启动最多</span>
-                <span className="lib-nav-count">
-                  {usage.frequentPaths.length}
-                </span>
-              </button>
             </nav>
 
             <div className="lib-rail-foot">
@@ -1554,6 +1811,7 @@ export default function LibraryView() {
                           style={
                             { "--i": Math.min(i, 48) } as React.CSSProperties
                           }
+                          onClick={() => selectApp(a.path)}
                         >
                           <div
                             className={s.cls}
@@ -1590,7 +1848,7 @@ export default function LibraryView() {
                                     }
                                   }}
                                 >
-                                  <IconTrash size={11} />
+                                  <IconTrash size={14} />
                                 </span>
                               ) : isInDock(a.path) ? (
                                 <span
@@ -1631,6 +1889,7 @@ export default function LibraryView() {
                           style={
                             { "--i": Math.min(i, 48) } as React.CSSProperties
                           }
+                          onClick={() => selectApp(a.path)}
                         >
                           <div
                             className={s.cls}
@@ -1682,7 +1941,7 @@ export default function LibraryView() {
                                 aria-label={`将 ${a.name} 移出便捷栏`}
                                 onClick={() => removeFromDockByPath(a.path)}
                               >
-                                <IconTrash size={13} />
+                                <IconTrash size={14} />
                               </button>
                             )}
                           </div>
@@ -1901,6 +2160,49 @@ export default function LibraryView() {
           </div>,
           document.body,
         )}
+
+      {updatePrompt && (
+        <div
+          className="lib-modal-mask"
+          onClick={() => {
+            if (!updateInstalling) setUpdatePrompt(null);
+          }}
+        >
+          <div
+            className="lib-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-label="更新提示"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 className="lib-modal-title">发现新版本</h3>
+            <p className="lib-modal-body">
+              当前 v{updateCheck?.currentVersion} → 新版本
+              v{updatePrompt.version}
+              <br />
+              点击「立即更新」将下载安装包，随后自动重启并完成覆盖安装。
+            </p>
+            <div className="lib-modal-actions">
+              <button
+                type="button"
+                className="btn btn--secondary"
+                disabled={updateInstalling}
+                onClick={() => setUpdatePrompt(null)}
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                className="btn btn--primary"
+                disabled={updateInstalling}
+                onClick={() => void startUpdate()}
+              >
+                {updateInstalling ? "下载安装中…" : "立即更新"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       <Toaster items={toasts} />
     </>

@@ -158,3 +158,9 @@ export const IconMountain = (p: IconProps) => (
     <circle cx="16.6" cy="6.2" r="1.8" />
   </Svg>
 );
+
+export const IconChevronDown = (p: IconProps) => (
+  <Svg strokeWidth={1.9} {...p}>
+    <path d="M6 9.5 12 15.5 18 9.5" />
+  </Svg>
+);

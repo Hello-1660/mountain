@@ -37,17 +37,9 @@
 /* =====================================================================
  * 面板表面掠过的柔光：光带在面板背景层缓慢移动，
  * 让动效出现在视野中心（面板占了大部分面积），而不是只在缝隙里。
- * 用 background-position 动画，只作用于第一层背景，不影响文字层。
+ * panel-sheen 光扫动画已移除（infinite 动画在隐藏窗口持续渲染，
+ * 曾导致 GPU 进程单核满载）；面板保留静态光带视觉。
  * ===================================================================== */
-
-@keyframes panel-sheen {
-  0% {
-    background-position: 135% 0, 0 0;
-  }
-  100% {
-    background-position: -55% 0, 0 0;
-  }
-}
 
 /* =============================== 顶栏 =============================== */
 
@@ -78,7 +70,6 @@
   box-shadow: var(--sh-2);
   animation:
     fade-rise var(--t4) var(--e-out) both,
-    panel-sheen 21s var(--e-soft) infinite;
 }
 
 .lib-brand {
@@ -173,6 +164,90 @@
   font-size: var(--fs-md);
   color: var(--text-1);
   outline: none;
+}
+
+/* ---------- 搜索域选择器（搜索范围：当前分组 / 任意分组）---------- */
+
+.lib-scope-wrap {
+  position: relative;
+  flex-shrink: 0;
+  margin-left: var(--s2);
+}
+
+.lib-scope {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  max-width: 128px;
+  padding: 3px var(--s2);
+  border: 1px solid var(--line-hair);
+  border-radius: var(--r-sm);
+  background: var(--bg-raise);
+  color: var(--text-2);
+  font-size: var(--fs-xs);
+  cursor: pointer;
+  white-space: nowrap;
+  transition:
+    border-color var(--t2) ease,
+    color var(--t2) ease,
+    background var(--t2) ease;
+}
+
+.lib-scope:hover {
+  border-color: var(--line);
+  color: var(--text-1);
+}
+
+.lib-scope-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.lib-scope-pop {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 40;
+  min-width: 168px;
+  padding: var(--s1);
+  border-radius: var(--r-md);
+  border: 1px solid var(--line);
+  background: rgba(28, 32, 44, 0.96);
+  box-shadow: var(--sh-pop);
+  animation: pop-in 140ms var(--e-out) both;
+}
+
+.lib-scope-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s3);
+  width: 100%;
+  padding: 6px var(--s2);
+  border: none;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--text-2);
+  font-size: var(--fs-sm);
+  cursor: pointer;
+  text-align: left;
+  transition:
+    background var(--t1) ease,
+    color var(--t1) ease;
+}
+
+.lib-scope-item:hover {
+  background: var(--bg-hover);
+  color: var(--text-1);
+}
+
+.lib-scope-item.active {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.lib-search-input:focus-within {
+  box-shadow: none;
 }
 
 .lib-search-input::placeholder {
@@ -337,7 +412,6 @@
   box-shadow: var(--sh-3);
   animation:
     fade-rise var(--t4) var(--e-out) 60ms both,
-    panel-sheen 25s var(--e-soft) -7s infinite;
 }
 
 .lib-rail-title {
@@ -401,12 +475,12 @@
   color: var(--text-2);
 }
 
-.lib-nav-item.active {
+.lib-nav-item.is-focused {
   background: var(--accent-soft);
   color: var(--accent);
 }
 
-.lib-nav-item.active > svg {
+.lib-nav-item.is-focused > svg {
   opacity: 1;
 }
 
@@ -419,7 +493,7 @@
   font-size: var(--fs-md);
 }
 
-.lib-nav-item.active .lib-nav-label {
+.lib-nav-item.is-focused .lib-nav-label {
   font-weight: 600;
 }
 
@@ -439,7 +513,7 @@
     color var(--t1) ease;
 }
 
-.lib-nav-item.active .lib-nav-count {
+.lib-nav-item.is-focused .lib-nav-count {
   background: var(--accent-soft-2);
   color: var(--accent);
 }
@@ -454,7 +528,7 @@
   background: var(--bg-hover);
 }
 
-.lib-group-row.active {
+.lib-group-row.is-focused {
   background: var(--accent-soft);
 }
 
@@ -470,7 +544,7 @@
   border-radius: var(--r-sm);
 }
 
-.lib-group-row.active .lib-group-main {
+.lib-group-row.is-focused .lib-group-main {
   color: var(--accent);
 }
 
@@ -620,7 +694,6 @@
   border-radius: var(--r-lg);
   backdrop-filter: blur(22px) saturate(140%);
   box-shadow: var(--sh-2);
-  animation: panel-sheen 19s var(--e-soft) -11s infinite;
 }
 
 .lib-recent::-webkit-scrollbar {
@@ -729,7 +802,6 @@
   border-radius: var(--r-lg);
   backdrop-filter: blur(22px) saturate(140%);
   box-shadow: var(--sh-3);
-  animation: panel-sheen 29s var(--e-soft) -14s infinite;
 }
 
 .lib-canvas-head {
@@ -847,10 +919,26 @@
     0 16px 34px -16px rgba(var(--tint, 147, 166, 255), 0.65);
 }
 
-.lib-row-wrap.active .lib-card {
-  background: var(--accent-soft);
+/* =====================================================================
+ * 唯一聚焦样式 .is-focused
+ * 全界面只有一个「当前选中」变量（sel），分组项与应用项渲染时判断
+ * sel === 自身才绑定本类；无任何其他聚焦/选中视觉（搜索框除外）。
+ * 背景/边框只画在条目本体一层（.lib-card/.lib-row 或 nav/group 行），
+ * wrapper 不画，避免出现双层聚焦框。
+ * ===================================================================== */
+.lib-row-wrap.is-focused .lib-card,
+.lib-row-wrap.is-focused .lib-row {
   border-color: var(--accent-line);
+  background: var(--accent-soft);
   box-shadow: var(--sh-2), 0 14px 30px -14px var(--accent-glow);
+}
+
+.is-focused .lib-card-name,
+.is-focused .lib-nav-label,
+.is-focused .lib-group-name,
+.is-focused .lib-nav-count {
+  color: var(--text-1);
+  font-weight: 600;
 }
 
 .lib-card-icon {
@@ -894,11 +982,6 @@
   word-break: break-word;
 }
 
-.lib-row-wrap.active .lib-card-name {
-  color: var(--text-1);
-  font-weight: 600;
-}
-
 .lib-card-pin {
   position: absolute;
   top: 6px;
@@ -918,8 +1001,8 @@
   right: 6px;
   display: grid;
   place-items: center;
-  width: 18px;
-  height: 18px;
+  width: 28px;
+  height: 28px;
   border-radius: var(--r-pill);
   color: var(--text-4);
   opacity: 0;
@@ -1118,7 +1201,6 @@
   box-shadow: var(--sh-3);
   animation:
     fade-rise var(--t4) var(--e-out) 180ms both,
-    panel-sheen 23s var(--e-soft) -3s infinite;
 }
 
 .lib-hero {
@@ -1598,4 +1680,46 @@ body.is-dragging-sort .lib-group-row {
   .lib-inspector {
     display: none;
   }
+}
+
+/* ========================== 覆盖更新弹窗 ========================== */
+
+.lib-modal-mask {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  display: grid;
+  place-items: center;
+  background: rgba(4, 6, 12, 0.55);
+  animation: fade-in 140ms var(--e-out) both;
+}
+
+.lib-modal {
+  width: min(400px, calc(100vw - 48px));
+  padding: var(--s5);
+  border-radius: var(--r-lg);
+  border: 1px solid var(--line);
+  background: rgba(28, 32, 44, 0.97);
+  box-shadow: var(--sh-pop);
+  animation: pop-in 160ms var(--e-out) both;
+}
+
+.lib-modal-title {
+  margin: 0 0 var(--s3);
+  font-size: var(--fs-lg);
+  font-weight: 600;
+  color: var(--text-1);
+}
+
+.lib-modal-body {
+  margin: 0 0 var(--s5);
+  font-size: var(--fs-md);
+  line-height: 1.7;
+  color: var(--text-2);
+}
+
+.lib-modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--s3);
 }

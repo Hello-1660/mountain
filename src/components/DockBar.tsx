@@ -102,6 +102,13 @@ export default function DockBar() {
     };
   }, []);
 
+  /* 禁用右键菜单：dock 是纯启动条，屏蔽 WebView 默认右键菜单的干扰 */
+  useEffect(() => {
+    const stop = (e: Event) => e.preventDefault();
+    document.addEventListener("contextmenu", stop);
+    return () => document.removeEventListener("contextmenu", stop);
+  }, []);
+
   /** 拖动便捷栏后写入磁盘；仅靠进程退出保存时，强退或崩溃会丢位置 */
   useEffect(() => {
     if (!isTauri()) return;

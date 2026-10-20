@@ -127,6 +127,14 @@ pub struct UpdateCheckDto {
     pub release_url: Option<String>,
     pub release_notes: Option<String>,
     pub fetch_error: Option<String>,
+    /// 安装包直链（release assets 里的 x64 setup.exe），供应用内下载
+    pub download_url: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct GithubAssetJson {
+    name: String,
+    browser_download_url: String,
 }
 
 #[derive(Deserialize)]
@@ -135,6 +143,8 @@ struct GithubReleaseJson {
     html_url: String,
     #[serde(default)]
     body: Option<String>,
+    #[serde(default)]
+    assets: Vec<GithubAssetJson>,
 }
 
 fn app_data_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
@@ -987,6 +997,7 @@ fn check_github_release() -> Result<UpdateCheckDto, String> {
         release_url: None,
         release_notes: None,
         fetch_error: None,
+        download_url: None,
     };
 
     let mut resp = match ureq::get(GITHUB_LATEST_RELEASE)
@@ -1026,6 +1037,16 @@ fn check_github_release() -> Result<UpdateCheckDto, String> {
     out.latest_version = Some(tag.clone());
     out.release_url = Some(release.html_url);
     out.release_notes = release.body;
+    // 安装包直链：优先 x64 setup.exe
+    out.download_url = release
+        .assets
+        .iter()
+        .find(|a| {
+            let n = a.name.to_lowercase();
+            n.ends_with(".exe") && (n.contains("x64") || n.contains("setup"))
+        })
+        .or_else(|| release.assets.iter().find(|a| a.name.to_lowercase().ends_with(".exe")))
+        .map(|a| a.browser_download_url.clone());
 
     out.has_update = match (
         semver::Version::parse(&tag),
@@ -1036,6 +1057,44 @@ fn check_github_release() -> Result<UpdateCheckDto, String> {
     };
 
     Ok(out)
+}
+
+/// 下载更新安装包到临时目录（流式写盘，内存恒定），返回安装包路径。
+#[tauri::command]
+async fn download_update(url: String) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let dest = std::env::temp_dir().join("mountain-update-setup.exe");
+        let mut resp = ureq::get(&url)
+            .header("User-Agent", "MountainLauncher")
+            .call()
+            .map_err(|e| format!("下载失败: {e}"))?;
+        let mut reader = resp.body_mut().as_reader();
+        let mut file = std::fs::File::create(&dest).map_err(|e| e.to_string())?;
+        std::io::copy(&mut reader, &mut file).map_err(|e| format!("写入失败: {e}"))?;
+        let len = file.metadata().map_err(|e| e.to_string())?.len();
+        if len < 100_000 {
+            let _ = std::fs::remove_file(&dest);
+            return Err("下载内容异常（文件过小），可能不是安装包".into());
+        }
+        Ok(dest.to_string_lossy().to_string())
+    })
+    .await
+    .map_err(|e| format!("下载任务失败: {e}"))?
+}
+
+/// 静默覆盖安装并重启：spawn NSIS 安装器（/S 静默）→ 退出自身，
+/// 安装器随后覆盖替换程序文件。
+#[tauri::command]
+async fn apply_update_and_restart(app: tauri::AppHandle, setup_path: String) -> Result<(), String> {
+    use std::process::Command;
+    let mut cmd = Command::new(&setup_path);
+    cmd.arg("/S");
+    hide_console_for_child(&mut cmd);
+    cmd.spawn().map_err(|e| format!("启动安装程序失败: {e}"))?;
+    // 等安装器进程就绪后再退出，避免文件被自身占用
+    std::thread::sleep(std::time::Duration::from_millis(500));
+    app.exit(0);
+    Ok(())
 }
 
 /// dock 窗口固定高度（px）。几何精算值：
@@ -1259,6 +1318,8 @@ pub fn run() {
             show_library_window,
             load_usage_snapshot,
             check_github_release,
+            download_update,
+            apply_update_and_restart,
             fit_dock_size,
         ])
         .build(context)

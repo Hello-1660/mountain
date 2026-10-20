@@ -19,15 +19,12 @@
 /* 与水印 logo 里光点的 animateMotion（6s）同周期 */
 .mark-stroke {
   stroke-dasharray: var(--dash, 320);
-  animation: stroke-draw 6s var(--e-soft) infinite;
 }
 
 .orbit-ring {
-  animation: orbit-spin 30s linear infinite;
 }
 
 .orbit-ring-rev {
-  animation: orbit-spin 44s linear infinite reverse;
 }
 
 /* ---------- 加载占位 ---------- */

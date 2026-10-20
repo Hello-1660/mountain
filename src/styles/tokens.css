@@ -171,10 +171,11 @@ button:disabled {
   outline: none;
 }
 
+/* 全局取消聚焦光环：界面聚焦状态只由统一选中变量的 .is-focused 表达
+ *（搜索框使用自己的 .lib-search-field:focus-within 样式，不受此影响） */
 :focus-visible {
   outline: none;
-  box-shadow: var(--ring);
-  border-radius: var(--r-xs);
+  box-shadow: none;
 }
 
 ::-webkit-scrollbar {
@@ -234,7 +235,6 @@ button:disabled {
     rgba(94, 122, 255, 0.55),
     transparent 68%
   );
-  animation: blob-1 22s var(--e-soft) infinite alternate;
 }
 
 .app-bg__blob--2 {
@@ -247,7 +247,6 @@ button:disabled {
     rgba(56, 190, 201, 0.42),
     transparent 66%
   );
-  animation: blob-2 29s var(--e-soft) infinite alternate;
 }
 
 .app-bg__blob--3 {
@@ -260,7 +259,6 @@ button:disabled {
     rgba(158, 92, 255, 0.38),
     transparent 68%
   );
-  animation: blob-3 25s var(--e-soft) infinite alternate;
 }
 
 /* 缓慢扫过画面的柔光带 */
@@ -279,7 +277,6 @@ button:disabled {
   );
   filter: blur(16px);
   will-change: transform;
-  animation: sheen-sweep 17s linear infinite;
 }
 
 .app-bg__grain {
@@ -289,7 +286,6 @@ button:disabled {
   mix-blend-mode: soft-light;
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='180' height='180' filter='url(%23n)' opacity='0.55'/%3E%3C/svg%3E");
   background-size: 180px 180px;
-  animation: grain-shift 1.1s steps(3) infinite;
 }
 
 .app-bg__vignette {
@@ -312,108 +308,9 @@ button:disabled {
   opacity: 0.26;
 }
 
-@keyframes blob-1 {
-  0% {
-    transform: translate3d(-4%, -6%, 0) scale(0.94);
-    opacity: 0.75;
-  }
-  35% {
-    transform: translate3d(16%, 8%, 0) scale(1.16);
-    opacity: 1;
-  }
-  70% {
-    transform: translate3d(6%, 20%, 0) scale(0.98);
-    opacity: 0.68;
-  }
-  100% {
-    transform: translate3d(-12%, 4%, 0) scale(1.1);
-    opacity: 0.9;
-  }
-}
-
-@keyframes blob-2 {
-  0% {
-    transform: translate3d(8%, 6%, 0) scale(1.08);
-    opacity: 0.85;
-  }
-  40% {
-    transform: translate3d(-18%, -10%, 0) scale(0.92);
-    opacity: 0.6;
-  }
-  75% {
-    transform: translate3d(-6%, 14%, 0) scale(1.14);
-    opacity: 0.95;
-  }
-  100% {
-    transform: translate3d(12%, -6%, 0) scale(1);
-    opacity: 0.75;
-  }
-}
-
-@keyframes blob-3 {
-  0% {
-    transform: translate3d(0, 6%, 0) scale(1);
-    opacity: 0.6;
-  }
-  45% {
-    transform: translate3d(18%, -12%, 0) scale(1.2);
-    opacity: 0.95;
-  }
-  100% {
-    transform: translate3d(-10%, -4%, 0) scale(0.96);
-    opacity: 0.7;
-  }
-}
-
-@keyframes sheen-sweep {
-  0% {
-    transform: translateX(0) rotate(10deg);
-  }
-  100% {
-    transform: translateX(340%) rotate(10deg);
-  }
-}
-
-@keyframes grain-shift {
-  0% {
-    background-position: 0 0;
-  }
-  33% {
-    background-position: -22px 16px;
-  }
-  66% {
-    background-position: 18px -18px;
-  }
-  100% {
-    background-position: 0 0;
-  }
-}
-
-/* 描边动画：循环「画出」线条 */
-@keyframes stroke-draw {
-  0% {
-    stroke-dashoffset: var(--dash, 320);
-    opacity: 0.12;
-  }
-  38% {
-    stroke-dashoffset: 0;
-    opacity: 1;
-  }
-  72% {
-    stroke-dashoffset: 0;
-    opacity: 1;
-  }
-  100% {
-    stroke-dashoffset: calc(var(--dash, 320) * -1);
-    opacity: 0.08;
-  }
-}
-
-@keyframes orbit-spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
+/* 描边动画定义与环境永动动画（blob/sheen/grain/orbit/stroke）已整体移除：
+ * blur(70px) 色斑无限循环曾使 GPU 进程单核满载（风扇常转），
+ * 现背景保留静态光斑视觉，不再逐帧重算模糊。 */
 
 @keyframes fade-rise {
   from {
@@ -471,4 +368,17 @@ button:disabled {
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
   }
+}
+
+/* =====================================================================
+ * 动画可见性门控（性能关键）
+ * AmbientBackground 的 blur(70px) 色斑 / grain / 光扫全是 infinite 动画，
+ * 每帧做高斯模糊重算——窗口隐藏（如库窗口被 hide）时文档仍在渲染，
+ * 造成 GPU 进程单核满载、风扇常转。页面不可见时全局暂停动画。
+ * 由 main.tsx 监听 visibilitychange 切换 html.win-hidden。
+ * ===================================================================== */
+html.win-hidden *,
+html.win-hidden *::before,
+html.win-hidden *::after {
+  animation-play-state: paused !important;
 }
