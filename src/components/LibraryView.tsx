@@ -10,10 +10,28 @@ import { createPortal } from "react-dom";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { disable, enable, isEnabled } from "@tauri-apps/plugin-autostart";
+import { getVersion } from "@tauri-apps/api/app";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import CachedAppIcon from "./CachedAppIcon";
 import Toaster, { useToasts } from "./Toaster";
 import { AmbientBackground, MarkLogo } from "./BrandMark";
+import {
+  DndContext,
+  KeyboardSensor,
+  PointerSensor,
+  closestCenter,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+} from "@dnd-kit/core";
+import {
+  SortableContext,
+  rectSortingStrategy,
+  sortableKeyboardCoordinates,
+  useSortable,
+  verticalListSortingStrategy,
+} from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
 import {
   IconCheck,
   IconChevronDown,
@@ -34,12 +52,6 @@ import {
   IconSettings,
   IconTrash,
 } from "./icons";
-import {
-  useDragSort,
-  dropAttr,
-  type DragPayload,
-  type DropTarget,
-} from "./useDragSort";
 import {
   DOCK_GROUP_ID,
   FREQUENT_GROUP_ID,
@@ -112,10 +124,95 @@ function formatBytes(n: number): string {
   return `${v.toFixed(v >= 10 || i === 0 ? 0 : 1)} ${u[i]}`;
 }
 
+/* ================= dnd-kit 可排序项 =================
+ * li 版（应用条目，网格/列表共用）与 div 版（分组行）。
+ * listeners 挂整项（PointerSensor distance:6 约束下点击仍正常）。 */
+
+function SortableLi({
+  id,
+  style,
+  onClick,
+  children,
+}: {
+  id: string;
+  style?: React.CSSProperties;
+  onClick?: (e: React.MouseEvent) => void;
+  children: React.ReactNode;
+}) {
+  const {
+    setNodeRef,
+    listeners,
+    attributes,
+    transform,
+    transition,
+    isDragging,
+    isOver,
+  } = useSortable({ id });
+  return (
+    <li
+      ref={setNodeRef}
+      style={
+        {
+          ...style,
+          transform: CSS.Transform.toString(transform),
+          transition,
+        } as React.CSSProperties
+      }
+      onClick={onClick}
+      {...attributes}
+      {...listeners}
+      data-dragging={isDragging || undefined}
+      data-over={isOver || undefined}
+    >
+      {children}
+    </li>
+  );
+}
+
+function SortableDiv({
+  id,
+  className,
+  innerRef,
+  children,
+}: {
+  id: string;
+  className?: string;
+  innerRef?: (el: HTMLDivElement | null) => void;
+  children: React.ReactNode;
+}) {
+  const {
+    setNodeRef,
+    listeners,
+    attributes,
+    transform,
+    transition,
+    isDragging,
+    isOver,
+  } = useSortable({ id });
+  return (
+    <div
+      ref={(el) => {
+        setNodeRef(el);
+        innerRef?.(el);
+      }}
+      className={className}
+      style={{ transform: CSS.Transform.toString(transform), transition }}
+      {...attributes}
+      {...listeners}
+      data-dragging={isDragging || undefined}
+      data-over={isOver || undefined}
+    >
+      {children}
+    </div>
+  );
+}
+
 export default function LibraryView() {
   const [store, setStore] = useState<AppStore | null>(null);
   const [scanned, setScanned] = useState<ScannedApp[]>([]);
   const [scannedAt, setScannedAt] = useState<number | null>(null);
+  /** 「从启动台移除」黑名单：历史视图（最近/启动最多）据此过滤 */
+  const [removedSet, setRemovedSet] = useState<Set<string>>(new Set());
   const [scanning, setScanning] = useState(false);
   const [catalogBootstrapping, setCatalogBootstrapping] = useState(true);
   const [query, setQuery] = useState("");
@@ -134,14 +231,30 @@ export default function LibraryView() {
   type Sel = { kind: "group"; id: string } | { kind: "app"; path: string } | null;
   const [sel, setSel] = useState<Sel>(null);
 
+  /* 「最近使用 / 启动最多」显示开关：关闭只隐藏 UI，记录继续保存 */
+  const uiRecent = store?.ui?.showRecent ?? true;
+  const uiFrequent = store?.ui?.showFrequent ?? true;
+
+  const toggleUiSetting = useCallback(
+    (key: "showRecent" | "showFrequent", v: boolean) => {
+      setStore((prev) => {
+        if (!prev) return prev;
+        const next = { ...prev, ui: { ...prev.ui, [key]: v } };
+        debouncedSave.current(next);
+        return next;
+      });
+    },
+    [],
+  );
+
   const navIds = useMemo(
     () => [
       "all",
       DOCK_GROUP_ID,
-      FREQUENT_GROUP_ID,
+      ...(uiFrequent ? [FREQUENT_GROUP_ID] : []),
       ...(store?.groups ?? []).map((g) => g.id),
     ],
-    [store],
+    [store, uiFrequent],
   );
 
   const selectGroup = useCallback((id: string) => {
@@ -176,6 +289,22 @@ export default function LibraryView() {
     recentPaths: [],
     frequentPaths: [],
   });
+  /* ---------- 彩蛋：搜索框输入图片名 + Enter 弹图 ---------- */
+  const EASTER_NAMES = [
+    "夜雨声烦",
+    "峰不语",
+    "拂云秋影中",
+    "札克",
+    "梦道",
+    "猫眼石",
+    "脱氧",
+    "诩",
+    "雨伞",
+  ] as const;
+  const [easterImg, setEasterImg] = useState<string | null>(null);
+
+  /** 本地版本号（设置面板常显，无需先点检查更新） */
+  const [localVersion, setLocalVersion] = useState<string | null>(null);
   const [updateCheck, setUpdateCheck] = useState<UpdateCheckDto | null>(null);
   const [updateBusy, setUpdateBusy] = useState(false);
   /* 覆盖更新流程：弹窗确认 → 下载安装包 → 静默安装并重启 */
@@ -199,6 +328,78 @@ export default function LibraryView() {
   const navRefs = useRef(new Map<string, HTMLElement>());
   const [indicator, setIndicator] = useState({ y: 0, h: 20, show: false });
   const { toasts, push } = useToasts();
+
+  useEffect(() => {
+    if (!isTauri()) return;
+    getVersion()
+      .then(setLocalVersion)
+      .catch(() => setLocalVersion(null));
+  }, []);
+
+  /* ---------- 使用记录删除（单条 / 勾选批量 / 清空全部）---------- */
+  const [checkedRecords, setCheckedRecords] = useState<Set<string>>(new Set());
+  /** 当前列表是否为「使用记录」域（最近使用 / 启动最多） */
+  const historyScopeId = query.trim() ? searchScope : groupId;
+  const isHistoryScope =
+    historyScopeId === RECENT_GROUP_ID || historyScopeId === FREQUENT_GROUP_ID;
+
+  const toggleRecordCheck = useCallback((path: string, on: boolean) => {
+    setCheckedRecords((prev) => {
+      const next = new Set(prev);
+      if (on) next.add(path);
+      else next.delete(path);
+      return next;
+    });
+  }, []);
+
+  const removeUsageRecord = useCallback(
+    (path: string) => {
+      void invoke<UsageSnapshot>("remove_usage_record", { path })
+        .then((snap) => {
+          setUsage(snap);
+          setCheckedRecords((prev) => {
+            const next = new Set(prev);
+            next.delete(path);
+            return next;
+          });
+          push("已删除使用记录");
+        })
+        .catch((e) => {
+          console.error(String(e));
+          push("删除失败，请重试");
+        });
+    },
+    [push],
+  );
+
+  const removeCheckedRecords = useCallback(() => {
+    const paths = [...checkedRecords];
+    if (paths.length === 0) return;
+    void invoke<UsageSnapshot>("remove_usage_records", { paths })
+      .then((snap) => {
+        setUsage(snap);
+        setCheckedRecords(new Set());
+        push(`已删除 ${paths.length} 条使用记录`);
+      })
+      .catch((e) => {
+        console.error(String(e));
+        push("删除失败，请重试");
+      });
+  }, [checkedRecords, push]);
+
+  const clearUsageRecords = useCallback(() => {
+    void invoke<UsageSnapshot>("clear_usage_records")
+      .then((snap) => {
+        setUsage(snap);
+        setCheckedRecords(new Set());
+        push("已清空全部使用记录");
+      })
+      .catch((e) => {
+        console.error(String(e));
+        push("清空失败，请重试");
+      });
+  }, [push]);
+
 
   /* 覆盖更新：下载安装包 → 静默安装并重启（弹窗确认后调用） */
   const startUpdate = useCallback(async () => {
@@ -370,6 +571,7 @@ export default function LibraryView() {
   const applyCatalog = useCallback((dto: AppCatalogDto) => {
     setScanned(dto.apps);
     setScannedAt(dto.scannedAt);
+    setRemovedSet(new Set((dto.removed ?? []).map((r) => r.toLowerCase())));
   }, []);
 
   useEffect(() => {
@@ -424,10 +626,14 @@ export default function LibraryView() {
   const listForScope = useCallback(
     (scopeId: string): ScannedApp[] => {
       if (scopeId === RECENT_GROUP_ID) {
-        return usage.recentPaths.map((p) => resolvePathToApp(p));
+        return usage.recentPaths
+          .filter((p) => !removedSet.has(p.toLowerCase()))
+          .map((p) => resolvePathToApp(p));
       }
       if (scopeId === FREQUENT_GROUP_ID) {
-        return usage.frequentPaths.map((e) => resolvePathToApp(e.path));
+        return usage.frequentPaths
+          .filter((e) => !removedSet.has(e.path.toLowerCase()))
+          .map((e) => resolvePathToApp(e.path));
       }
       if (scopeId === DOCK_GROUP_ID && store) {
         return dockAppsList;
@@ -435,14 +641,21 @@ export default function LibraryView() {
       if (scopeId !== "all" && store) {
         const g = store.groups.find((x) => x.id === scopeId);
         if (g) {
-          const set = new Set(g.paths.map((p) => p.toLowerCase()));
-          return scanned.filter((a) => set.has(a.path.toLowerCase()));
+          // 按用户拖拽排序（g.paths 顺序）渲染，而不是扫描序
+          const idx = new Map(g.paths.map((p, i) => [p.toLowerCase(), i]));
+          return scanned
+            .filter((a) => idx.has(a.path.toLowerCase()))
+            .sort(
+              (a, b) =>
+                (idx.get(a.path.toLowerCase()) ?? 0) -
+                (idx.get(b.path.toLowerCase()) ?? 0),
+            );
         }
         return scanned;
       }
       return scanned;
     },
-    [usage, store, dockAppsList, scanned, resolvePathToApp],
+    [usage, store, dockAppsList, scanned, resolvePathToApp, removedSet],
   );
 
   const filtered = useMemo(() => {
@@ -487,6 +700,7 @@ export default function LibraryView() {
     (app: ScannedApp) => {
       void invoke("launch_app", {
         path: app.path,
+        ...(app.shortcut ? { shortcut: app.shortcut } : {}),
         ...(app.workingDirectory
           ? { workingDirectory: app.workingDirectory }
           : {}),
@@ -497,24 +711,36 @@ export default function LibraryView() {
   );
 
   const pickFile = () => {
-    void invoke<string | null>("pick_executable")
-      .then((p) => {
-        if (!p) return;
-        void invoke<AppCatalogDto>("add_manual_executable", { path: p })
+    void invoke<string[]>("pick_executables")
+      .then((paths) => {
+        const list = (paths ?? []).map((p) => p.trim()).filter(Boolean);
+        if (list.length === 0) return;
+        // 多选批量：一次入库，不自动钉 dock（避免便捷栏被一次塞满）
+        if (list.length > 1) {
+          return invoke<AppCatalogDto>("add_manual_executables", {
+            paths: list,
+          }).then((dto) => {
+            applyCatalog(dto);
+            push(`已批量添加 ${list.length} 个应用`);
+          });
+        }
+        // 单选：保持原行为（入库 + 钉到便捷栏）
+        const p = list[0];
+        return invoke<AppCatalogDto>("add_manual_executable", { path: p })
           .then((dto) => {
             applyCatalog(dto);
             push("已添加到应用目录");
             return invoke<DockItem>("new_dock_item", { path: p, title: null });
           })
           .then((item) => {
+            if (!item) return;
             setStore((prev) => {
               if (!prev) return prev;
               const next = { ...prev, dock: [...prev.dock, item] };
               debouncedSave.current(next);
               return next;
             });
-          })
-          .catch((e) => console.error(String(e)));
+          });
       })
       .catch((e) => console.error(String(e)));
   };
@@ -647,6 +873,29 @@ export default function LibraryView() {
     [],
   );
 
+  /** 便捷启动视图内拖拽 = 调整 dock 顺序（与便捷栏磁贴同步） */
+  const reorderDockByPaths = useCallback(
+    (fromPath: string, toPath: string) => {
+      setStore((prev) => {
+        if (!prev) return prev;
+        const arr = [...prev.dock];
+        const fi = arr.findIndex(
+          (d) => d.path.toLowerCase() === fromPath.toLowerCase(),
+        );
+        const ti = arr.findIndex(
+          (d) => d.path.toLowerCase() === toPath.toLowerCase(),
+        );
+        if (fi < 0 || ti < 0 || fi === ti) return prev;
+        const [moved] = arr.splice(fi, 1);
+        arr.splice(ti, 0, moved);
+        const next = { ...prev, dock: arr };
+        debouncedSave.current(next);
+        return next;
+      });
+    },
+    [],
+  );
+
   const confirmDeleteGroup = (gid: string) => {
     if (!store) return;
     persist({ ...store, groups: store.groups.filter((g) => g.id !== gid) });
@@ -710,33 +959,51 @@ export default function LibraryView() {
     return store?.groups.some((g) => g.id === groupId) ?? false;
   }, [groupId, store]);
 
-  /* 拖拽排序 / 拖入分组：指针实现，桌面端与浏览器行为一致 */
-  const commitDrag = useCallback(
-    (d: DragPayload, t: DropTarget) => {
-      if (d.kind === "app" && t.kind === "app") {
-        if (isCustomGroupView) reorderGroupMembers(groupId, d.path, t.path);
+  /* 拖拽排序（dnd-kit）：分组栏重排、应用列表组内重排、应用拖入分组 */
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
+    useSensor(KeyboardSensor, {
+      coordinateGetter: sortableKeyboardCoordinates,
+    }),
+  );
+
+  const onDragEnd = useCallback(
+    (e: DragEndEvent) => {
+      const { active, over } = e;
+      if (!over || active.id === over.id) return;
+      const split = (v: string | number) => {
+        const t = String(v);
+        const i = t.indexOf(":");
+        return [t.slice(0, i), t.slice(i + 1)] as const;
+      };
+      const [ak, av] = split(active.id);
+      const [ok, ov] = split(over.id);
+      if (ak === "group" && ok === "group") {
+        reorderGroups(av, ov);
         return;
       }
-      if (d.kind === "app" && t.kind === "group") {
-        addPathToGroup(d.path, t.id);
-        const g = store?.groups.find((x) => x.id === t.id);
+      if (ak === "app" && ok === "app") {
+        if (isCustomGroupView) reorderGroupMembers(groupId, av, ov);
+        else if (groupId === DOCK_GROUP_ID) reorderDockByPaths(av, ov);
+        return;
+      }
+      if (ak === "app" && ok === "group") {
+        addPathToGroup(av, ov);
+        const g = store?.groups.find((x) => x.id === ov);
         if (g) push(`已加入分组「${g.name}」`);
-        return;
       }
-      if (d.kind === "group" && t.kind === "group") reorderGroups(d.id, t.id);
     },
     [
       isCustomGroupView,
       groupId,
       reorderGroupMembers,
+      reorderDockByPaths,
       addPathToGroup,
       reorderGroups,
       store,
       push,
     ],
   );
-
-  const dragSort = useDragSort(commitDrag);
 
   useEffect(() => {
     setRowContextMenu(null);
@@ -961,12 +1228,14 @@ export default function LibraryView() {
         }
         return;
       }
-      // 输入框豁免：非搜索框的输入框（别名/新分组等）不接管；
-      // 搜索框内只放行 Tab（搜索域切换归 input），↑↓/Enter 走下方
-      // 统一选中分发——否则焦点停在搜索框时 ↑↓ 会反复重置到首/末项。
+      // 输入框豁免：非搜索框的输入框（别名/新分组等）不接管。
+      // 搜索框内仅接管 ↑↓（进列表）与 Enter（启动）；←→/Home/End/
+      // Backspace 等一律放行，保持原生光标移动与编辑行为。
       const isSearch = target === searchRef.current;
       if (isField && !isSearch) return;
-      if (isSearch && (e.key === "Tab" || e.key.length === 1)) return;
+      if (isSearch && !["ArrowUp", "ArrowDown", "Enter"].includes(e.key)) {
+        return;
+      }
       if (!isField && e.key === "/") {
         e.preventDefault();
         searchRef.current?.focus();
@@ -992,7 +1261,10 @@ export default function LibraryView() {
         if (e.key === "ArrowRight" || e.key === "Enter") {
           e.preventDefault();
           const first = filtered[0];
-          if (first) selectApp(first.path);
+          if (first) {
+            selectApp(first.path);
+            if (isSearch) searchRef.current?.blur();
+          }
           return;
         }
         if (e.key === "Tab") {
@@ -1008,7 +1280,10 @@ export default function LibraryView() {
         if (e.key === "ArrowDown") {
           e.preventDefault();
           const next = filtered[Math.min(i + 1, filtered.length - 1)];
-          if (next) selectApp(next.path);
+          if (next) {
+            selectApp(next.path);
+            if (isSearch) searchRef.current?.blur();
+          }
           return;
         }
         if (e.key === "ArrowUp") {
@@ -1029,6 +1304,11 @@ export default function LibraryView() {
         }
         if (e.key === "Enter") {
           e.preventDefault();
+          const hit = EASTER_NAMES.find((n) => n === query.trim());
+          if (hit) {
+            setEasterImg(`${import.meta.env.BASE_URL}easter/${hit}.jpg`);
+            return;
+          }
           const a = filtered[i];
           if (a) launch(a);
           return;
@@ -1043,12 +1323,24 @@ export default function LibraryView() {
         }
         return;
       }
+      // 无选中时 Enter：命中彩蛋则弹图
+      if (e.key === "Enter") {
+        const hit = EASTER_NAMES.find((n) => n === query.trim());
+        if (hit) {
+          e.preventDefault();
+          setEasterImg(`${import.meta.env.BASE_URL}easter/${hit}.jpg`);
+          return;
+        }
+      }
       // 无选中：↑↓ 直接进入应用列表（首项/末项）
       if (e.key === "ArrowDown" || e.key === "ArrowUp") {
         e.preventDefault();
         const pick =
           e.key === "ArrowDown" ? filtered[0] : filtered[filtered.length - 1];
-        if (pick) selectApp(pick.path);
+        if (pick) {
+          selectApp(pick.path);
+          if (isSearch) searchRef.current?.blur();
+        }
       }
     };
     window.addEventListener("keydown", onKey);
@@ -1058,6 +1350,7 @@ export default function LibraryView() {
     filtered,
     navIds,
     groupId,
+    query,
     selectGroup,
     selectApp,
     launch,
@@ -1146,6 +1439,17 @@ export default function LibraryView() {
         },
       });
     }
+    if (isHistoryScope) {
+      items.push({
+        key: "remove-usage",
+        label: "删除使用记录",
+        danger: true,
+        run: () => {
+          setRowContextMenu(null);
+          removeUsageRecord(path);
+        },
+      });
+    }
     items.push({
       key: "remove-app",
       label:
@@ -1171,6 +1475,8 @@ export default function LibraryView() {
     pinPath,
     confirmRemovePath,
     removeApp,
+    isHistoryScope,
+    removeUsageRecord,
   ]);
 
   const contextMenuPos = useMemo(() => {
@@ -1214,11 +1520,11 @@ export default function LibraryView() {
     () => [
       { id: "all", name: "全部应用" },
       { id: DOCK_GROUP_ID, name: "便捷启动" },
-      { id: RECENT_GROUP_ID, name: "最近使用" },
-      { id: FREQUENT_GROUP_ID, name: "启动最多" },
+      ...(uiRecent ? [{ id: RECENT_GROUP_ID, name: "最近使用" }] : []),
+      ...(uiFrequent ? [{ id: FREQUENT_GROUP_ID, name: "启动最多" }] : []),
       ...(store?.groups ?? []).map((g) => ({ id: g.id, name: g.name })),
     ],
-    [store],
+    [store, uiRecent, uiFrequent],
   );
 
   /** Tab 循环切换搜索域（Shift+Tab 反向）；顺序与下拉一致 */
@@ -1233,18 +1539,32 @@ export default function LibraryView() {
     [scopeOptions],
   );
 
+  // 显示开关关闭后，若搜索域正停在被隐藏的域 → 回退「全部应用」
+  useEffect(() => {
+    setSearchScope((cur) =>
+      scopeOptions.some((o) => o.id === cur) ? cur : "all",
+    );
+  }, [scopeOptions]);
+
   // 侧栏切分组时搜索域回到「默认 = 当前分组」
   useEffect(() => {
     setSearchScope(groupId);
   }, [groupId]);
 
   const recentApps = useMemo(
-    () => usage.recentPaths.slice(0, 9).map((p) => resolvePathToApp(p)),
-    [usage.recentPaths, resolvePathToApp],
+    () =>
+      usage.recentPaths
+        .filter((p) => !removedSet.has(p.toLowerCase()))
+        .slice(0, 9)
+        .map((p) => resolvePathToApp(p)),
+    [usage.recentPaths, resolvePathToApp, removedSet],
   );
 
   const showRecent =
-    groupId === "all" && !query.trim() && recentApps.length > 0;
+    uiRecent &&
+    groupId === "all" &&
+    !query.trim() &&
+    recentApps.length > 0;
 
   if (!store) {
     return (
@@ -1292,17 +1612,14 @@ export default function LibraryView() {
 
   /** 网格 / 列表共用的外壳属性 */
   const shell = (app: ScannedApp) => {
-    const payload: DragPayload = { kind: "app", path: app.path };
     const focused = sel?.kind === "app" && sel.path === app.path;
     const cls =
       "lib-row-wrap " +
       view +
       (focused ? " is-focused" : "") +
-      (dragSort.isDragging(payload) ? " dragging" : "") +
-      (dragSort.isTarget(payload) ? " drop-target" : "");
+      (checkedRecords.has(app.path) ? " is-checked" : "");
     return {
       cls,
-      payload,
       tint: tints[app.path],
       onMenu: (e: React.MouseEvent) => {
         e.preventDefault();
@@ -1313,6 +1630,11 @@ export default function LibraryView() {
 
   return (
     <>
+      <DndContext
+        sensors={sensors}
+        collisionDetection={closestCenter}
+        onDragEnd={onDragEnd}
+      >
       <AmbientBackground logoSize={420} />
       <div className="lib-root">
         <div className="lib-shell">
@@ -1384,7 +1706,7 @@ export default function LibraryView() {
                       setScopeOpen(false);
                     }
                   }}
-                  placeholder="搜索应用名称或路径…（Tab 切换搜索范围）"
+                  placeholder="Tab 切换搜索范围"
                   aria-label="搜索应用"
                   spellCheck={false}
                 />
@@ -1461,6 +1783,40 @@ export default function LibraryView() {
                     </div>
                     <div className="lib-setting-row">
                       <span className="lib-setting-text">
+                        <span className="lib-setting-name">最近使用记录</span>
+                        <span className="lib-setting-hint">
+                          关闭仅隐藏入口，启动记录继续保存
+                        </span>
+                      </span>
+                      <button
+                        type="button"
+                        className="lib-switch"
+                        role="switch"
+                        aria-checked={uiRecent}
+                        aria-label="显示最近使用"
+                        onClick={() => toggleUiSetting("showRecent", !uiRecent)}
+                      />
+                    </div>
+                    <div className="lib-setting-row">
+                      <span className="lib-setting-text">
+                        <span className="lib-setting-name">启动最多记录</span>
+                        <span className="lib-setting-hint">
+                          关闭仅隐藏入口，启动次数继续统计
+                        </span>
+                      </span>
+                      <button
+                        type="button"
+                        className="lib-switch"
+                        role="switch"
+                        aria-checked={uiFrequent}
+                        aria-label="显示启动最多"
+                        onClick={() =>
+                          toggleUiSetting("showFrequent", !uiFrequent)
+                        }
+                      />
+                    </div>
+                    <div className="lib-setting-row">
+                      <span className="lib-setting-text">
                         <span className="lib-setting-name">全局快捷键</span>
                         <span className="lib-setting-hint">
                           随时呼出「全部应用」
@@ -1472,9 +1828,9 @@ export default function LibraryView() {
                       <span className="lib-setting-text">
                         <span className="lib-setting-name">版本</span>
                         <span className="lib-setting-hint">
-                          {updateCheck?.currentVersion
-                            ? `当前 v${updateCheck.currentVersion}`
-                            : "检查 GitHub 上的新版本"}
+                          {(localVersion ?? updateCheck?.currentVersion)
+                            ? `当前 v${localVersion ?? updateCheck?.currentVersion}`
+                            : "本地版本"}
                         </span>
                       </span>
                       <button
@@ -1582,6 +1938,7 @@ export default function LibraryView() {
                 <span className="lib-nav-count">{store.dock.length}</span>
               </button>
 
+              {uiFrequent && (
               <button
                 type="button"
                 ref={(el) => {
@@ -1602,9 +1959,13 @@ export default function LibraryView() {
                   {usage.frequentPaths.length}
                 </span>
               </button>
+              )}
 
+              <SortableContext
+                items={store.groups.map((g) => "group:" + g.id)}
+                strategy={verticalListSortingStrategy}
+              >
               {store.groups.map((g) => {
-                const groupPayload: DragPayload = { kind: "group", id: g.id };
                 return renamingGroupId === g.id ? (
                   <div key={g.id} className="lib-group-rename">
                     <input
@@ -1620,21 +1981,18 @@ export default function LibraryView() {
                     />
                   </div>
                 ) : (
-                  <div
+                  <SortableDiv
                     key={g.id}
-                    ref={(el) => {
+                    id={"group:" + g.id}
+                    innerRef={(el) => {
                       if (el) navRefs.current.set(g.id, el);
                       else navRefs.current.delete(g.id);
                     }}
                     className={
                       "lib-group-row" +
                       (sel?.kind === "group" && sel.id === g.id ? " is-focused"
-                        : "") +
-                      (dragSort.isDragging(groupPayload) ? " dragging" : "") +
-                      (dragSort.isTarget(groupPayload) ? " drop-target" : "")
+                        : "")
                     }
-                    {...dropAttr(groupPayload)}
-                    onPointerDown={(e) => dragSort.begin(e, groupPayload)}
                   >
                     <button
                       type="button"
@@ -1704,9 +2062,10 @@ export default function LibraryView() {
                         </button>
                       </div>
                     )}
-                  </div>
+                  </SortableDiv>
                 );
               })}
+              </SortableContext>
             </nav>
 
             <div className="lib-rail-foot">
@@ -1766,7 +2125,9 @@ export default function LibraryView() {
             <section className="lib-canvas">
               <div className="lib-canvas-head">
                 <h2 className="lib-canvas-title">
-                  {currentGroupName}
+                  {query.trim()
+                    ? `${scopeName(searchScope)}`
+                    : currentGroupName}
                   <span className="lib-canvas-count">{filtered.length} 个</span>
                 </h2>
                 <span className="lib-spacer" />
@@ -1792,6 +2153,31 @@ export default function LibraryView() {
                 </div>
               </div>
 
+              {isHistoryScope && (
+                <div className="lib-usage-bar">
+                  <span className="lib-usage-bar-hint">
+                    Ctrl+点击多选 · 右键单条删除
+                  </span>
+                  <div className="lib-usage-bar-actions">
+                    <button
+                      type="button"
+                      className="btn btn--secondary"
+                      disabled={checkedRecords.size === 0}
+                      onClick={removeCheckedRecords}
+                    >
+                      删除选中 ({checkedRecords.size})
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn--secondary"
+                      onClick={clearUsageRecords}
+                    >
+                      清空全部记录
+                    </button>
+                  </div>
+                </div>
+              )}
+
               <div className="lib-canvas-scroll">
                 {filtered.length === 0 ? (
                   <div className="lib-empty">
@@ -1803,28 +2189,42 @@ export default function LibraryView() {
                   </div>
                 ) : view === "grid" ? (
                   <ul className="lib-grid" key="grid">
+                    <SortableContext
+                      items={filtered.map((a) => "app:" + a.path)}
+                      strategy={rectSortingStrategy}
+                    >
                     {filtered.map((a, i) => {
                       const s = shell(a);
                       return (
-                        <li
+                        <SortableLi
                           key={a.path}
+                          id={"app:" + a.path}
                           style={
                             { "--i": Math.min(i, 48) } as React.CSSProperties
                           }
-                          onClick={() => selectApp(a.path)}
+                          onClick={(e: React.MouseEvent) => {
+                            if (e.ctrlKey || e.metaKey) {
+                              if (isHistoryScope) {
+                                e.preventDefault();
+                                toggleRecordCheck(
+                                  a.path,
+                                  !checkedRecords.has(a.path),
+                                );
+                                return;
+                              }
+                            }
+                            selectApp(a.path);
+                          }}
                         >
                           <div
                             className={s.cls}
                             style={{ "--tint": s.tint } as React.CSSProperties}
-                            {...dropAttr(s.payload)}
-                            onPointerDown={(e) => dragSort.begin(e, s.payload)}
                             onContextMenu={s.onMenu}
                           >
                             <button
                               type="button"
                               className="lib-card"
                               onClick={() => {
-                                if (dragSort.consumeClickSuppression()) return;
                                 setSelectedPath(a.path);
                               }}
                               onDoubleClick={() => launch(a)}
@@ -1874,35 +2274,50 @@ export default function LibraryView() {
                               </span>
                             </button>
                           </div>
-                        </li>
+                        </SortableLi>
                       );
                     })}
+                    </SortableContext>
                   </ul>
                 ) : (
                   <ul className="lib-list" key="list">
+                    <SortableContext
+                      items={filtered.map((a) => "app:" + a.path)}
+                      strategy={verticalListSortingStrategy}
+                    >
                     {filtered.map((a, i) => {
                       const s = shell(a);
                       const freq = frequentCount[a.path.toLowerCase()];
                       return (
-                        <li
+                        <SortableLi
                           key={a.path}
+                          id={"app:" + a.path}
                           style={
                             { "--i": Math.min(i, 48) } as React.CSSProperties
                           }
-                          onClick={() => selectApp(a.path)}
+                          onClick={(e: React.MouseEvent) => {
+                            if (e.ctrlKey || e.metaKey) {
+                              if (isHistoryScope) {
+                                e.preventDefault();
+                                toggleRecordCheck(
+                                  a.path,
+                                  !checkedRecords.has(a.path),
+                                );
+                                return;
+                              }
+                            }
+                            selectApp(a.path);
+                          }}
                         >
                           <div
                             className={s.cls}
                             style={{ "--tint": s.tint } as React.CSSProperties}
-                            {...dropAttr(s.payload)}
-                            onPointerDown={(e) => dragSort.begin(e, s.payload)}
                             onContextMenu={s.onMenu}
                           >
                             <button
                               type="button"
                               className="lib-row"
                               onClick={() => {
-                                if (dragSort.consumeClickSuppression()) return;
                                 setSelectedPath(a.path);
                               }}
                               onDoubleClick={() => launch(a)}
@@ -1945,9 +2360,10 @@ export default function LibraryView() {
                               </button>
                             )}
                           </div>
-                        </li>
+                        </SortableLi>
                       );
                     })}
+                    </SortableContext>
                   </ul>
                 )}
               </div>
@@ -2204,7 +2620,24 @@ export default function LibraryView() {
         </div>
       )}
 
+      {easterImg && (
+        <div
+          className="lib-modal-mask"
+          onClick={() => setEasterImg(null)}
+          role="dialog"
+          aria-label="彩蛋图片"
+        >
+          <img
+            className="lib-easter-img"
+            src={easterImg}
+            alt="彩蛋"
+            onClick={(e) => e.stopPropagation()}
+          />
+        </div>
+      )}
+
       <Toaster items={toasts} />
+      </DndContext>
     </>
   );
 }

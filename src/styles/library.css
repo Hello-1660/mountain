@@ -76,7 +76,9 @@
   display: flex;
   align-items: center;
   gap: var(--s3);
+  flex: 0 1 auto;
   min-width: 0;
+  overflow: hidden;
 }
 
 /* 品牌标识：透明底，只保留描边图形本身 */
@@ -115,10 +117,13 @@
   white-space: nowrap;
 }
 
+/* 搜索框自适应：弹性吃剩余空间（max 封顶、min 保底），
+ * margin auto 均分两侧空白 → 视觉居中；窗口缩小时随流收缩不压两侧按钮 */
 .lib-search {
-  flex: 1;
-  max-width: 340px;
-  margin-left: auto;
+  flex: 1 1 240px;
+  min-width: 150px;
+  max-width: 460px;
+  margin: 0 auto;
 }
 
 .lib-search-field {
@@ -287,7 +292,10 @@
 .lib-actions {
   display: flex;
   align-items: center;
+  justify-content: flex-end;
   gap: var(--s2);
+  flex: 0 1 auto;
+  min-width: 0;
 }
 
 .lib-settings-wrap {
@@ -1722,4 +1730,47 @@ body.is-dragging-sort .lib-group-row {
   display: flex;
   justify-content: flex-end;
   gap: var(--s3);
+}
+
+/* ===================== 使用记录删除工具条 / 勾选 ===================== */
+
+.lib-usage-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s3);
+  margin-bottom: var(--s3);
+  padding: var(--s2) var(--s3);
+  border-radius: var(--r-sm);
+  border: 1px solid var(--line-hair);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.lib-usage-bar-hint {
+  font-size: var(--fs-xs);
+  color: var(--text-4);
+}
+
+.lib-usage-bar-actions {
+  display: flex;
+  gap: var(--s2);
+}
+
+/* Ctrl+点击多选态：描边圈出已选条目 */
+.lib-row-wrap.is-checked .lib-card,
+.lib-row-wrap.is-checked .lib-row {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+/* ===================== 彩蛋图片弹层 ===================== */
+
+.lib-easter-img {
+  max-width: min(860px, 88vw);
+  max-height: 82vh;
+  border-radius: var(--r-lg);
+  border: 1px solid var(--line);
+  box-shadow: var(--sh-pop);
+  animation: pop-in 180ms var(--e-out) both;
+  cursor: default;
 }

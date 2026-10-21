@@ -114,15 +114,13 @@
   cursor: pointer;
 }
 
-/* hover 反馈由光环承担：透明磁贴没有底板，必须给足存在感 */
+/* hover 反馈：只保留边框环（磁贴投影已移除） */
 .dock-tile:hover {
-  box-shadow:
-    0 0 0 1px rgba(255, 255, 255, 0.1),
-    0 10px 26px -8px rgba(147, 166, 255, 0.55);
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.1);
 }
 
 .dock-tile:focus-visible {
-  box-shadow: var(--ring);
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.1);
 }
 
 .dock-tile:not(.dock-tile-more):active {
@@ -149,39 +147,8 @@
   color: var(--text-1);
 }
 
-/* ---------- 移除角标 ---------- */
-
-.dock-tile-remove {
-  position: absolute;
-  top: -4px;
-  right: -4px;
-  z-index: 3;
-  width: 22px;
-  height: 22px;
-  display: grid;
-  place-items: center;
-  border-radius: 50%;
-  border: 1px solid rgba(255, 255, 255, 0.18);
-  background: rgba(242, 120, 127, 0.9);
-  color: #fff;
-  opacity: 0;
-  transform: scale(0.6);
-  transition:
-    opacity var(--t2) var(--e-out),
-    transform var(--t2) var(--e-spring),
-    background var(--t1) ease;
-  box-shadow: 0 2px 8px rgba(4, 6, 12, 0.5);
-}
-
-.dock-tile:hover .dock-tile-remove,
-.dock-tile:focus-within .dock-tile-remove {
-  opacity: 1;
-  transform: scale(1);
-}
-
-.dock-tile-remove:hover {
-  background: #ff8b91;
-}
+/* 悬停红色移除角标已删除：dock 是纯启动条，移除应用走
+ * 启动台右键菜单（「从便捷栏移除」）或拖出 dock 手势。 */
 
 /* ---------- 「全部应用」入口：主操作，轻拟态白底 ---------- */
 

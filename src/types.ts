@@ -20,11 +20,19 @@ export interface AppGroup {
   paths: string[];
 }
 
+/** 界面显示开关：关闭只隐藏 UI，历史记录继续保存 */
+export interface LibUiSettings {
+  showRecent?: boolean;
+  showFrequent?: boolean;
+}
+
 export interface AppStore {
   dock: DockItem[];
   groups: AppGroup[];
   /** 应用路径（小写）→ 用户自定义别名 */
   aliases?: Record<string, string>;
+  /** 界面显示开关（最近使用 / 启动最多） */
+  ui?: LibUiSettings;
 }
 
 /** 取别名，未设置则返回原名 */
@@ -59,6 +67,8 @@ export interface ScannedApp {
   name: string;
   path: string;
   shortcut?: string;
+  /** 快捷方式指向的目标 exe（去重标识） */
+  target?: string;
   /** 开始菜单快捷方式「起始位置」，与 Rust/catalog JSON 字段一致 */
   workingDirectory?: string;
   iconPath?: string;

@@ -1,0 +1,89 @@
+name: release
+
+# 推送 v* 标签 → 构建 Windows 安装包 → SignPath 开源代码签名 → 发布 GitHub Release
+# 需在仓库配置（Settings → Secrets and variables → Actions）：
+#   Secret:   SIGNPATH_API_TOKEN            （SignPath API Token，Submitter 权限）
+#   Variable: SIGNPATH_ORGANIZATION_ID      （SignPath 组织 ID）
+#   Variable: SIGNPATH_PROJECT_SLUG         （SignPath 项目 slug）
+#   Variable: SIGNPATH_SIGNING_POLICY_SLUG  （签名策略 slug，开源通常 release-signing）
+on:
+  push:
+    tags: ["v*"]
+
+jobs:
+  build-sign-release:
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install frontend deps
+        run: npm ci
+
+      - name: Build installer (Tauri / NSIS)
+        run: npm run tauri build
+
+      - name: Locate installer
+        id: find
+        shell: pwsh
+        run: |
+          $exe = Get-ChildItem "src-tauri/target/release/bundle/nsis/*-setup.exe" |
+                 Select-Object -First 1
+          if (-not $exe) { throw "未找到 NSIS 安装包" }
+          Write-Host "installer: $($exe.FullName)"
+          "path=$($exe.FullName)" >> $env:GITHUB_OUTPUT
+
+      # SignPath 要求：待签文件必须先作为 workflow artifact 上传
+      - name: Upload unsigned installer
+        id: upload-unsigned-artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: unsigned-installer
+          path: ${{ steps.find.outputs.path }}
+          if-no-files-found: error
+
+      - name: Submit signing request (SignPath)
+        id: signpath
+        uses: signpath/github-action-submit-signing-request@v2
+        with:
+          api-token: "${{ secrets.SIGNPATH_API_TOKEN }}"
+          organization-id: "${{ vars.SIGNPATH_ORGANIZATION_ID }}"
+          project-slug: "${{ vars.SIGNPATH_PROJECT_SLUG }}"
+          signing-policy-slug: "${{ vars.SIGNPATH_SIGNING_POLICY_SLUG }}"
+          github-artifact-id: "${{ steps.upload-unsigned-artifact.outputs.artifact-id }}"
+          wait-for-completion: true
+          output-artifact-directory: "./signed"
+
+      - name: Verify Authenticode signature
+        shell: pwsh
+        run: |
+          $signed = Get-ChildItem ./signed/*-setup.exe | Select-Object -First 1
+          if (-not $signed) { throw "签名产物缺失" }
+          $sig = Get-AuthenticodeSignature $signed.FullName
+          Write-Host "Status: $($sig.Status)"
+          Write-Host "Signer: $($sig.SignerCertificate.Subject)"
+          if ($sig.Status -ne "Valid") { throw "签名状态异常: $($sig.Status)" }
+          if ($sig.SignerCertificate.Subject -notmatch "SignPath Foundation") {
+            throw "签名者不是 SignPath Foundation: $($sig.SignerCertificate.Subject)"
+          }
+          Write-Host "签名校验通过: $($signed.Name)"
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: ./signed/*-setup.exe

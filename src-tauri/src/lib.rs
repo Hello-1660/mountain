@@ -21,6 +21,24 @@ use tauri::tray::TrayIconBuilder;
 use tauri::{Emitter, Manager, RunEvent};
 use uuid::Uuid;
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct LibUiSettings {
+    /// 显示「最近使用」（横带 + 搜索域）；关闭仅隐藏 UI，记录继续保存
+    pub show_recent: bool,
+    /// 显示「启动最多」（侧栏 + 搜索域）；关闭仅隐藏 UI，记录继续保存
+    pub show_frequent: bool,
+}
+
+impl Default for LibUiSettings {
+    fn default() -> Self {
+        Self {
+            show_recent: true,
+            show_frequent: true,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct AppStore {
@@ -29,6 +47,9 @@ pub struct AppStore {
     /// 应用路径（小写）→ 用户自定义别名；为空表示用扫描到的名称
     #[serde(default)]
     pub aliases: HashMap<String, String>,
+    /// 界面显示开关（关闭只隐藏 UI，不影响记录）
+    #[serde(default)]
+    pub ui: LibUiSettings,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -56,6 +77,9 @@ pub struct ScannedApp {
     pub path: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub shortcut: Option<String>,
+    /// 快捷方式指向的目标 exe（去重用：同一目标只保留快捷方式条目）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target: Option<String>,
     /// 开始菜单 .lnk 的「起始位置」，部分程序依赖此目录才能启动
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub working_dir: Option<String>,
@@ -575,12 +599,34 @@ fn load_app_catalog(app: tauri::AppHandle) -> Result<AppCatalogDto, String> {
         });
     }
     let raw = fs::read_to_string(&p).map_err(|e| e.to_string())?;
-    serde_json::from_str(&raw).map_err(|e| e.to_string())
+    let mut dto: AppCatalogDto = serde_json::from_str(&raw).map_err(|e| e.to_string())?;
+    // 幂等去重（旧缓存自愈）：同 path 只留一条，快捷方式（带 target）优先
+    let mut index: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    let mut apps: Vec<ScannedApp> = Vec::new();
+    for a in dto.apps.drain(..) {
+        let key = a.path.to_lowercase();
+        match index.get(&key) {
+            None => {
+                index.insert(key, apps.len());
+                apps.push(a);
+            }
+            Some(&i) => {
+                if apps[i].target.is_none() && a.target.is_some() {
+                    apps[i] = a;
+                }
+            }
+        }
+    }
+    dto.apps = apps;
+    Ok(dto)
 }
 
 /// 将手动选择的 exe 并入本地目录（供「全部」列表与持久化 catalog 使用）。
-#[tauri::command]
-fn add_manual_executable(app: tauri::AppHandle, path: String) -> Result<AppCatalogDto, String> {
+fn push_manual_app(
+    dto: &mut AppCatalogDto,
+    app: &tauri::AppHandle,
+    path: &str,
+) -> Result<bool, String> {
     let path = path.trim().to_string();
     if path.is_empty() {
         return Err("路径为空".into());
@@ -591,13 +637,12 @@ fn add_manual_executable(app: tauri::AppHandle, path: String) -> Result<AppCatal
     if !pb.exists() {
         return Err("路径不存在".into());
     }
-    let mut dto = load_app_catalog(app.clone())?;
     if dto
         .apps
         .iter()
         .any(|a| a.path.eq_ignore_ascii_case(&path))
     {
-        return Ok(dto);
+        return Ok(false);
     }
     // 手动添加即明确意图：若此前移除过，从黑名单恢复，否则重新扫描会把它挡掉
     let key = path.trim().to_lowercase();
@@ -612,15 +657,41 @@ fn add_manual_executable(app: tauri::AppHandle, path: String) -> Result<AppCatal
         .filter(|p| !p.as_os_str().is_empty())
         .and_then(|p| p.to_str())
         .map(String::from);
-    let icon_path = ensure_icon_for_exe(&app, &path).unwrap_or(None);
+    let icon_path = ensure_icon_for_exe(app, &path).unwrap_or(None);
     dto.apps.push(ScannedApp {
         name,
         path,
         shortcut: None,
+        target: None,
         working_dir,
         icon_path,
         manual: true,
     });
+    Ok(true)
+}
+
+#[tauri::command]
+fn add_manual_executable(app: tauri::AppHandle, path: String) -> Result<AppCatalogDto, String> {
+    let mut dto = load_app_catalog(app.clone())?;
+    push_manual_app(&mut dto, &app, &path)?;
+    dto
+        .apps
+        .sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    save_catalog(&app, &dto)?;
+    Ok(dto)
+}
+
+/// 批量手动添加：一次对话框多选 → 一次性并入目录并保存
+#[tauri::command]
+fn add_manual_executables(
+    app: tauri::AppHandle,
+    paths: Vec<String>,
+) -> Result<AppCatalogDto, String> {
+    let mut dto = load_app_catalog(app.clone())?;
+    for p in &paths {
+        // 单条失败（路径不存在等）跳过，不影响其余
+        let _ = push_manual_app(&mut dto, &app, p);
+    }
     dto
         .apps
         .sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
@@ -651,7 +722,12 @@ fn remove_app(app: tauri::AppHandle, path: String) -> Result<AppCatalogDto, Stri
         g.paths.retain(|p| !p.eq_ignore_ascii_case(&path));
     }
     store.aliases.remove(&key);
-    save_store(app, store)?;
+    save_store(app.clone(), store)?;
+
+    // 启动历史清理：「最近使用 / 启动最多」不再出现已移除应用
+    let mut usage = load_usage_file(&app)?;
+    usage.entries.retain(|k, _| !k.eq_ignore_ascii_case(&key));
+    save_usage_file(&app, &usage)?;
     Ok(dto)
 }
 
@@ -668,6 +744,9 @@ $ErrorActionPreference = 'SilentlyContinue'
 $seen = @{}
 $results = New-Object System.Collections.ArrayList
 $roots = @(
+  # 桌面快捷方式优先（用户自建入口，与已有应用重复时保留快捷方式）
+  [Environment]::GetFolderPath('Desktop'),
+  (Join-Path $env:PUBLIC 'Desktop'),
   (Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs'),
   (Join-Path $env:ProgramData 'Microsoft\Windows\Start Menu\Programs')
 )
@@ -687,8 +766,9 @@ foreach ($root in $roots) {
           $seen[$key] = $true
           $item = [ordered]@{
             name = [System.IO.Path]::GetFileNameWithoutExtension($_.Name)
-            path = $t
+            path = $_.FullName
             shortcut = $_.FullName
+            target = $t
           }
           $wd = $s.WorkingDirectory
           if ($wd -and ((Test-Path -LiteralPath $wd -PathType Container))) {
@@ -731,21 +811,32 @@ if ($results.Count -eq 0) { '[]' } else { ($results | ConvertTo-Json -Depth 4 -C
                 )
             })?;
 
-        let mut seen: HashSet<String> = HashSet::new();
+        // 双重去重：path 唯一（同一快捷方式只留一条）+ 目标 exe 唯一
+        // （同一应用的多个快捷方式只留一条，桌面优先先到先得）。
+        // 仅按目标去重会让「manual exe 条目 + 快捷方式条目」因 key 不同
+        // 同时保留（同一路径出现两条），故 path 也必须唯一。
+        let mut seen_key: HashSet<String> = HashSet::new();
+        let mut seen_path: HashSet<String> = HashSet::new();
         let mut out = Vec::new();
         for mut a in apps {
-            let key = a.path.to_lowercase();
-            if seen.insert(key) {
-                if a.name.trim().is_empty() {
-                    a.name = Path::new(&a.path)
-                        .file_stem()
-                        .and_then(|s| s.to_str())
-                        .unwrap_or("应用")
-                        .to_string();
-                }
-                a.icon_path = None;
-                out.push(a);
+            let key = a
+                .target
+                .as_deref()
+                .unwrap_or(a.path.as_str())
+                .to_lowercase();
+            let path_key = a.path.to_lowercase();
+            if !seen_path.insert(path_key) || !seen_key.insert(key) {
+                continue;
             }
+            if a.name.trim().is_empty() {
+                a.name = Path::new(&a.path)
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("应用")
+                    .to_string();
+            }
+            a.icon_path = None;
+            out.push(a);
         }
         out.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
         Ok(out)
@@ -761,14 +852,25 @@ fn refresh_catalog_blocking(app: tauri::AppHandle) -> Result<AppCatalogDto, Stri
     // 移除黑名单：用户手动移除过的应用，重新扫描不再拉回
     let removed: HashSet<String> = prev.removed.iter().cloned().collect();
     let mut apps = scan_start_menu_collect()?;
-    apps.retain(|a| !removed.contains(&a.path.to_lowercase()));
-    let mut paths: HashSet<String> = apps.iter().map(|a| a.path.to_lowercase()).collect();
+    // key = 目标 exe：快捷方式条目与旧 exe 条目/manual 条目同目标视为同一应用
+    let key_of = |a: &ScannedApp| {
+        a.target
+            .as_deref()
+            .unwrap_or(a.path.as_str())
+            .to_lowercase()
+    };
+    apps.retain(|a| !removed.contains(&key_of(a)));
+    let mut paths: HashSet<String> = apps.iter().map(|a| key_of(a)).collect();
+    let mut path_set: HashSet<String> =
+        apps.iter().map(|a| a.path.to_lowercase()).collect();
     for a in &prev.apps {
-        if a.manual
-            && !paths.contains(&a.path.to_lowercase())
-            && !removed.contains(&a.path.to_lowercase())
+        let k = key_of(a);
+        let p = a.path.to_lowercase();
+        // 同目标 exe 或同路径都视为重复：快捷方式条目胜出，manual 不追加
+        if a.manual && !paths.contains(&k) && !path_set.contains(&p) && !removed.contains(&k)
         {
-            paths.insert(a.path.to_lowercase());
+            paths.insert(k);
+            path_set.insert(p);
             let mut m = a.clone();
             m.icon_path = ensure_icon_for_exe(&app, &m.path).unwrap_or(None);
             apps.push(m);
@@ -906,11 +1008,19 @@ fn launch_app(
     app: tauri::AppHandle,
     path: String,
     working_directory: Option<String>,
+    shortcut: Option<String>,
 ) -> Result<(), String> {
     let path = path.trim();
     if path.is_empty() {
         return Err("路径为空".into());
     }
+    // 优先快捷方式启动：保留 .lnk 内的参数/工作目录/兼容性设置
+    let preferred = shortcut
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| s.to_lowercase().ends_with(".lnk") && Path::new(s).is_file())
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| path.to_string());
     let exe = Path::new(path);
     let wd = launch_cwd_for_exe(
         exe,
@@ -923,16 +1033,16 @@ fn launch_app(
     #[cfg(target_os = "windows")]
     {
         // 先尝试 CreateProcess：文件不存在等错误能直接返回。
-        // 若失败（如 Geek Uninstaller 的 exe 带 requireAdministrator 清单会返回
-        // ERROR_ELEVATION_REQUIRED=740，或其他 ShellExecute 才能处理的情形），
+        // 若失败（如 .lnk 需 ShellExecute 解析、Geek Uninstaller 的 exe 带
+        // requireAdministrator 清单会返回 ERROR_ELEVATION_REQUIRED=740），
         // 退回 ShellExecute("open")，与「双击」一致：按清单自动弹 UAC 提权启动。
-        let mut cmd = Command::new(path);
+        let mut cmd = Command::new(&preferred);
         if let Some(ref dir) = wd {
             cmd.current_dir(dir);
         }
         match cmd.spawn() {
             Ok(_) => {}
-            Err(e) => match shell_open(path, wd.as_deref()) {
+            Err(e) => match shell_open(&preferred, wd.as_deref()) {
                 Ok(_) => {}
                 Err(_) => return Err(format!("启动失败: {e}")),
             },
@@ -956,7 +1066,12 @@ fn launch_app(
 #[tauri::command]
 fn load_usage_snapshot(app: tauri::AppHandle) -> Result<UsageSnapshotDto, String> {
     let file = load_usage_file(&app)?;
-    let values: Vec<UsageEntry> = file.entries.into_values().collect();
+    // 清理死记录：目标文件已删除/卸载的历史不再展示（图标会是占位符的那些）
+    let values: Vec<UsageEntry> = file
+        .entries
+        .into_values()
+        .filter(|e| Path::new(e.path.trim()).is_file())
+        .collect();
 
     let mut by_recent = values.clone();
     by_recent.sort_by_key(|e| std::cmp::Reverse(e.last_used_ms));
@@ -985,6 +1100,41 @@ fn load_usage_snapshot(app: tauri::AppHandle) -> Result<UsageSnapshotDto, String
         recent_paths,
         frequent_paths,
     })
+}
+
+/// 删除单条使用记录（最近使用 / 启动最多）
+#[tauri::command]
+fn remove_usage_record(
+    app: tauri::AppHandle,
+    path: String,
+) -> Result<UsageSnapshotDto, String> {
+    let key = path.trim().to_lowercase();
+    let mut usage = load_usage_file(&app)?;
+    usage.entries.retain(|k, _| !k.eq_ignore_ascii_case(&key));
+    save_usage_file(&app, &usage)?;
+    load_usage_snapshot(app)
+}
+
+/// 批量删除使用记录
+#[tauri::command]
+fn remove_usage_records(
+    app: tauri::AppHandle,
+    paths: Vec<String>,
+) -> Result<UsageSnapshotDto, String> {
+    let set: HashSet<String> = paths.iter().map(|p| p.trim().to_lowercase()).collect();
+    let mut usage = load_usage_file(&app)?;
+    usage.entries.retain(|k, _| !set.contains(&k.to_lowercase()));
+    save_usage_file(&app, &usage)?;
+    load_usage_snapshot(app)
+}
+
+/// 清空全部使用记录
+#[tauri::command]
+fn clear_usage_records(app: tauri::AppHandle) -> Result<UsageSnapshotDto, String> {
+    let mut usage = load_usage_file(&app)?;
+    usage.entries.clear();
+    save_usage_file(&app, &usage)?;
+    load_usage_snapshot(app)
 }
 
 #[tauri::command]
@@ -1198,6 +1348,23 @@ async fn pick_executable(app: tauri::AppHandle) -> Result<Option<String>, String
     Ok(file.map(|f| f.to_string()))
 }
 
+/// 批量手动添加：一次多选多个文件
+#[tauri::command]
+async fn pick_executables(app: tauri::AppHandle) -> Result<Vec<String>, String> {
+    use tauri_plugin_dialog::DialogExt;
+    let files = app
+        .dialog()
+        .file()
+        .add_filter("可执行文件 / 脚本 / 链接", PICKABLE_EXTENSIONS)
+        .add_filter("所有文件", &["*"])
+        .blocking_pick_files();
+    Ok(files
+        .unwrap_or_default()
+        .into_iter()
+        .map(|f| f.to_string())
+        .collect())
+}
+
 /// 登录/计划任务自启时传入；仅显示便捷栏，不打开「全部应用」窗口。
 const AUTOSTART_ARG: &str = "--mountain-autostart";
 
@@ -1274,6 +1441,8 @@ pub fn run() {
                 let menu = MenuBuilder::new(app)
                     .text("library", "打开全部应用")
                     .separator()
+                    .text("toggle_dock", "显示/隐藏 dock 栏")
+                    .separator()
                     .text("quit", "退出 Mountain")
                     .build()
                     .expect("tray menu");
@@ -1293,6 +1462,14 @@ pub fn run() {
                             tauri::async_runtime::spawn(async move {
                                 let _ = show_library_window(h).await;
                             });
+                        } else if event.id == "toggle_dock" {
+                            if let Some(w) = app.get_webview_window("dock") {
+                                if w.is_visible().unwrap_or(true) {
+                                    let _ = w.hide();
+                                } else {
+                                    let _ = w.show();
+                                }
+                            }
                         } else if event.id == "quit" {
                             app.exit(0);
                         }
@@ -1311,12 +1488,17 @@ pub fn run() {
             launch_app,
             load_app_catalog,
             add_manual_executable,
+            add_manual_executables,
             remove_app,
             refresh_app_catalog,
             read_icon_data_url,
             pick_executable,
+            pick_executables,
             show_library_window,
             load_usage_snapshot,
+            remove_usage_record,
+            remove_usage_records,
+            clear_usage_records,
             check_github_release,
             download_update,
             apply_update_and_restart,

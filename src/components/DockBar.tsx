@@ -250,11 +250,6 @@ export default function DockBar() {
     launchTimer.current = setTimeout(() => setLaunchedId(null), 540);
   }, []);
 
-  const onRemove = (id: string) => {
-    if (!store) return;
-    save({ ...store, dock: store.dock.filter((d) => d.id !== id) });
-  };
-
   /* ---------------- 交互：拖拽排序（指针实现，桌面端同样可用） ---------------- */
 
   const moveDockItem = useCallback(
@@ -360,34 +355,6 @@ export default function DockBar() {
                 aria-label={name}
               >
                 <DockTileFace title={item.title} iconPath={item.iconPath} />
-                <span
-                  className="dock-tile-remove"
-                  onMouseDown={(e) => e.stopPropagation()}
-                  onClick={(e) => {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    onRemove(item.id);
-                  }}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" || e.key === " ") {
-                      e.preventDefault();
-                      e.stopPropagation();
-                      onRemove(item.id);
-                    }
-                  }}
-                  role="button"
-                  tabIndex={0}
-                  aria-label={`将 ${item.title} 移出便捷栏`}
-                >
-                  <svg width="11" height="11" viewBox="0 0 24 24" aria-hidden>
-                    <path
-                      d="M6 6l12 12M18 6 6 18"
-                      stroke="currentColor"
-                      strokeWidth="3"
-                      strokeLinecap="round"
-                    />
-                  </svg>
-                </span>
               </div>
             );
           })}
