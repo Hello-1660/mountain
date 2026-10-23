@@ -1,0 +1,22 @@
+/* =====================================================================
+ * 「全部应用」窗口样式入口
+ *
+ * 样式按界面区块拆分（顺序即层叠顺序，不要随意调整）：
+ *   base       根容器 / 栅格骨架
+ *   header     顶栏（品牌、搜索、动作）
+ *   controls   按钮等通用控件
+ *   rail       左：分组导航
+ *   stage      中：主舞台（最近使用、网格 / 列表、空状态）
+ *   inspector  右：详情面板
+ *   popover    设置浮层
+ *   overlays   右键菜单、Toast、拖拽反馈、模态、彩蛋
+ * ===================================================================== */
+
+@import "./base.css";
+@import "./header.css";
+@import "./controls.css";
+@import "./rail.css";
+@import "./stage.css";
+@import "./inspector.css";
+@import "./popover.css";
+@import "./overlays.css";

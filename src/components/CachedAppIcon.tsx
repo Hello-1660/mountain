@@ -1,6 +1,7 @@
 import { useEffect, useState, type ReactNode } from "react";
-import { invoke } from "@tauri-apps/api/core";
-import { appIconSrc } from "../appIconSrc";
+
+import { readIconDataUrl } from "../lib/api";
+import { appIconSrc } from "../lib/appIconSrc";
 
 type Props = {
   iconPath?: string;
@@ -76,7 +77,7 @@ export default function CachedAppIcon({
     const p = iconPath?.trim();
     if (!triedFallback && p) {
       setTriedFallback(true);
-      void invoke<string | null>("read_icon_data_url", { path: p }).then((u) => {
+      void readIconDataUrl(p).then((u) => {
         if (u) setSrc(u);
         else setDead(true);
       });

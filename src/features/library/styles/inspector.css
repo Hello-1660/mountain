@@ -1,0 +1,264 @@
+/* =========================== 右：详情 =========================== */
+
+.lib-inspector {
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--s3);
+  background:
+    linear-gradient(
+        100deg,
+        transparent 33%,
+        rgba(158, 130, 255, 0.09) 47%,
+        rgba(147, 166, 255, 0.05) 54%,
+        transparent 67%
+      )
+      no-repeat,
+    var(--bg-panel);
+  background-size: 250% 100%, auto;
+  border: 1px solid var(--line-hair);
+  border-radius: var(--r-lg);
+  backdrop-filter: blur(22px) saturate(140%);
+  box-shadow: var(--sh-3);
+  animation:
+    fade-rise var(--t4) var(--e-out) 180ms both,
+}
+
+.lib-hero {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--s2);
+  padding: var(--s4) var(--s3);
+  border-radius: var(--r-md);
+  border: 1px solid var(--line-hair);
+  background:
+    radial-gradient(
+      100% 70% at 50% 0%,
+      rgba(var(--tint, 147, 166, 255), 0.24),
+      transparent 70%
+    ),
+    var(--bg-inset);
+  overflow: hidden;
+}
+
+.lib-hero-icon {
+  width: 58px;
+  height: 58px;
+  border-radius: var(--r-md);
+  object-fit: contain;
+  background: linear-gradient(
+    180deg,
+    rgba(255, 255, 255, 0.1),
+    rgba(255, 255, 255, 0.03)
+  );
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.12),
+    0 10px 24px -12px rgba(4, 6, 12, 0.8);
+}
+
+.lib-hero-icon-fallback {
+  display: grid;
+  place-items: center;
+  font-size: var(--fs-xl);
+  font-weight: 650;
+  color: var(--text-1);
+}
+
+.lib-hero-name {
+  margin: 0;
+  font-size: var(--fs-md);
+  font-weight: 650;
+  color: var(--text-1);
+  text-align: center;
+  word-break: break-word;
+}
+
+.lib-hero-sub {
+  margin: 0;
+  font-size: var(--fs-2xs);
+  color: var(--text-4);
+}
+
+.lib-inspector-actions {
+  margin-top: var(--s3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+}
+
+.lib-field {
+  margin-top: var(--s3);
+}
+
+.lib-field-label {
+  display: block;
+  margin-bottom: var(--s2);
+  font-size: var(--fs-2xs);
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-4);
+}
+
+.lib-select {
+  width: 100%;
+  height: 32px;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--line-hair);
+  padding: 0 var(--s2);
+  background: var(--bg-raise);
+  color: var(--text-2);
+  font-size: var(--fs-md);
+  outline: none;
+  transition: border-color var(--t1) ease;
+}
+
+.lib-select:hover {
+  border-color: var(--line);
+}
+
+.lib-select:focus {
+  border-color: var(--accent-line);
+}
+
+/* 别名输入 */
+.lib-input {
+  width: 100%;
+  height: 32px;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--line-hair);
+  padding: 0 var(--s2);
+  background: var(--bg-raise);
+  color: var(--text-1);
+  font-size: var(--fs-md);
+  outline: none;
+  transition: border-color var(--t1) ease;
+}
+
+.lib-input::placeholder {
+  color: var(--text-4);
+}
+
+.lib-input:hover {
+  border-color: var(--line);
+}
+
+.lib-input:focus {
+  border-color: var(--accent-line);
+}
+
+/* 已加入分组的标签 */
+.lib-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s1);
+  margin-top: var(--s2);
+}
+
+.lib-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  max-width: 100%;
+  padding: 3px 4px 3px var(--s2);
+  border-radius: var(--r-pill);
+  border: 1px solid var(--accent-line);
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: var(--fs-2xs);
+}
+
+.lib-chip-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lib-chip-x {
+  display: grid;
+  place-items: center;
+  width: 15px;
+  height: 15px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  color: inherit;
+  opacity: 0.65;
+  transition:
+    background var(--t1) ease,
+    opacity var(--t1) ease;
+}
+
+.lib-chip-x:hover {
+  background: rgba(255, 255, 255, 0.14);
+  opacity: 1;
+}
+
+.lib-meta {
+  margin-top: var(--s4);
+  display: flex;
+  flex-direction: column;
+}
+
+.lib-meta-row {
+  display: grid;
+  grid-template-columns: 56px minmax(0, 1fr);
+  gap: var(--s2);
+  padding: var(--s2) 0;
+  border-top: 1px solid var(--line-hair);
+  font-size: var(--fs-xs);
+}
+
+.lib-meta-k {
+  color: var(--text-4);
+}
+
+.lib-meta-v {
+  min-width: 0;
+  color: var(--text-2);
+  word-break: break-all;
+}
+
+.lib-meta-v.mono {
+  font-family: var(--font-mono);
+  font-size: var(--fs-2xs);
+  color: var(--text-3);
+}
+
+.lib-meta-row.copyable {
+  cursor: pointer;
+  border-radius: var(--r-xs);
+  padding-inline: 6px;
+  margin-inline: -6px;
+  transition: background var(--t1) ease;
+}
+
+.lib-meta-row.copyable:hover {
+  background: var(--bg-hover);
+}
+
+.lib-meta-row.copyable:hover .lib-meta-v {
+  color: var(--accent);
+}
+
+.lib-warn {
+  color: var(--danger);
+}
+
+.lib-muted {
+  color: var(--text-4);
+  font-size: var(--fs-xs);
+}
+
+.lib-inspector-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--s2);
+  height: 100%;
+  min-height: 180px;
+  color: var(--text-4);
+  text-align: center;
+}
+

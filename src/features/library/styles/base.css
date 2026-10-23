@@ -1,0 +1,43 @@
+/* =====================================================================
+ * 全部应用 · 启动台 v2
+ *
+ * 布局：环境背景之上漂浮三组玻璃面板（导航 / 画布 / 详情），顶栏同样悬浮，
+ * 不与面板贴边 —— 破除「分区 + 分割线」的死板结构。
+ * 权重：核心内容（应用网格）最大；主操作实心 + 环境色投影；
+ * 次级操作降为幽灵按钮；三级操作为图标按钮。
+ * ===================================================================== */
+
+.lib-root {
+  position: relative;
+  height: 100%;
+  min-height: 0;
+  color: var(--text-2);
+}
+
+.panel {
+  background: var(--bg-panel);
+  border: 1px solid var(--line-hair);
+  border-radius: var(--r-lg);
+  backdrop-filter: blur(22px) saturate(140%);
+  box-shadow: var(--sh-3);
+}
+
+.lib-shell {
+  position: relative;
+  z-index: 1;
+  height: 100%;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 204px minmax(0, 1fr) 256px;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 14px;
+  padding: 14px 16px 16px;
+}
+
+/* =====================================================================
+ * 面板表面掠过的柔光：光带在面板背景层缓慢移动，
+ * 让动效出现在视野中心（面板占了大部分面积），而不是只在缝隙里。
+ * panel-sheen 光扫动画已移除（infinite 动画在隐藏窗口持续渲染，
+ * 曾导致 GPU 进程单核满载）；面板保留静态光带视觉。
+ * ===================================================================== */
+

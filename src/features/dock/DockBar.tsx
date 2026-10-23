@@ -1,13 +1,27 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import { invoke, isTauri } from "@tauri-apps/api/core";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { saveWindowState } from "@tauri-apps/plugin-window-state";
-import CachedAppIcon from "./CachedAppIcon";
-import { IconGrid } from "./icons";
-import { useDragSort, dropAttr, type DragPayload, type DropTarget } from "./useDragSort";
-import { displayName, type AppStore, type DockItem } from "../types";
-import "../styles/dock.css";
+
+import CachedAppIcon from "../../components/CachedAppIcon";
+import { IconGrid } from "../../components/icons";
+import {
+  useDragSort,
+  dropAttr,
+  type DragPayload,
+  type DropTarget,
+} from "../../hooks/useDragSort";
+import {
+  fitDockSize,
+  launchApp,
+  loadStore,
+  saveStore,
+  showLibraryWindow,
+} from "../../lib/api";
+import { debounce } from "../../lib/format";
+import { displayName, type AppStore, type DockItem } from "../../types";
+import "./dock.css";
 
 /** 磁贴最大放大倍率（与 dock.css 中的 .dock-tile 尺寸无关，纯 CSS 变换） */
 const MAX_GAIN = 0.28;
@@ -31,17 +45,6 @@ function DockTileFace({
   );
 }
 
-function debounce<T extends (...args: Parameters<T>) => void>(
-  fn: T,
-  ms: number,
-): (...args: Parameters<T>) => void {
-  let t: ReturnType<typeof setTimeout> | undefined;
-  return (...args: Parameters<T>) => {
-    if (t) clearTimeout(t);
-    t = setTimeout(() => fn(...args), ms);
-  };
-}
-
 const libraryOpenLock = { current: false };
 
 async function openLibrary() {
@@ -52,7 +55,7 @@ async function openLibrary() {
   if (libraryOpenLock.current) return;
   libraryOpenLock.current = true;
   try {
-    await invoke("show_library_window");
+    await showLibraryWindow();
   } catch (e) {
     console.error("打开全部应用窗口失败:", e);
   } finally {
@@ -74,15 +77,17 @@ export default function DockBar() {
     undefined,
   );
 
-  const debouncedSave = useRef(
-    debounce((s: AppStore) => {
-      void invoke("save_store", { store: s }).catch((e) => console.error(String(e)));
-    }, 280),
+  const debouncedSave = useMemo(
+    () =>
+      debounce((s: AppStore) => {
+        void saveStore(s).catch((e) => console.error(String(e)));
+      }, 280),
+    [],
   );
 
   const save = useCallback((next: AppStore) => {
     setStore(next);
-    debouncedSave.current(next);
+    debouncedSave(next);
   }, []);
 
   useEffect(() => {
@@ -139,7 +144,7 @@ export default function DockBar() {
   }, []);
 
   useEffect(() => {
-    void invoke<AppStore>("load_store").then(setStore);
+    void loadStore().then(setStore);
   }, []);
 
   /* ---------------- 窗口宽度自适应 ----------------
@@ -156,7 +161,7 @@ export default function DockBar() {
     // offsetWidth 会坍缩到窗口宽，导致永远撑不大的死锁
     const contentW = items.scrollWidth;
     if (contentW <= 0) return;
-    void invoke("fit_dock_size", { contentWidth: contentW }).catch((e) =>
+    void fitDockSize(contentW).catch((e) =>
       console.error(String(e)),
     );
   }, []);
@@ -242,7 +247,7 @@ export default function DockBar() {
   /* ---------------- 交互：启动 / 增删 ---------------- */
 
   const onLaunch = useCallback((item: DockItem) => {
-    void invoke("launch_app", { path: item.path }).catch((e) =>
+    void launchApp({ path: item.path }).catch((e) =>
       console.error(String(e)),
     );
     setLaunchedId(item.id);

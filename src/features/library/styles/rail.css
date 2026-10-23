@@ -1,0 +1,270 @@
+/* ============================ 左：导航 ============================ */
+
+.lib-rail {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  padding: var(--s3);
+  background:
+    linear-gradient(
+        104deg,
+        transparent 36%,
+        rgba(147, 166, 255, 0.085) 48%,
+        transparent 64%
+      )
+      no-repeat,
+    var(--bg-panel);
+  background-size: 250% 100%, auto;
+  border: 1px solid var(--line-hair);
+  border-radius: var(--r-lg);
+  backdrop-filter: blur(22px) saturate(140%);
+  box-shadow: var(--sh-3);
+  animation:
+    fade-rise var(--t4) var(--e-out) 60ms both,
+}
+
+.lib-rail-title {
+  padding: var(--s1) var(--s2) var(--s2);
+  font-size: var(--fs-2xs);
+  font-weight: 650;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-4);
+}
+
+.lib-nav {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+/* 选中项之间的滑动指示器 */
+.lib-nav-indicator {
+  position: absolute;
+  left: 0;
+  width: 3px;
+  border-radius: var(--r-pill);
+  background: linear-gradient(180deg, var(--accent), var(--accent-deep));
+  box-shadow: 0 0 12px var(--accent-glow);
+  transition:
+    transform var(--t3) var(--e-spring),
+    height var(--t3) var(--e-spring),
+    opacity var(--t2) ease;
+  pointer-events: none;
+}
+
+.lib-nav-item {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  width: 100%;
+  height: 36px;
+  padding: 0 var(--s2) 0 var(--s3);
+  border-radius: var(--r-sm);
+  color: var(--text-3);
+  text-align: left;
+  transition:
+    background var(--t1) ease,
+    color var(--t1) ease;
+}
+
+.lib-nav-item > svg {
+  flex-shrink: 0;
+  opacity: 0.8;
+  transition: opacity var(--t1) ease;
+}
+
+.lib-nav-item:hover {
+  background: var(--bg-hover);
+  color: var(--text-2);
+}
+
+.lib-nav-item.is-focused {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.lib-nav-item.is-focused > svg {
+  opacity: 1;
+}
+
+.lib-nav-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--fs-md);
+}
+
+.lib-nav-item.is-focused .lib-nav-label {
+  font-weight: 600;
+}
+
+.lib-nav-count {
+  flex-shrink: 0;
+  min-width: 22px;
+  padding: 0 6px;
+  border-radius: var(--r-pill);
+  background: rgba(255, 255, 255, 0.06);
+  font-size: var(--fs-2xs);
+  line-height: 18px;
+  text-align: center;
+  color: var(--text-4);
+  font-variant-numeric: tabular-nums;
+  transition:
+    background var(--t1) ease,
+    color var(--t1) ease;
+}
+
+.lib-nav-item.is-focused .lib-nav-count {
+  background: var(--accent-soft-2);
+  color: var(--accent);
+}
+
+.lib-group-row {
+  position: relative;
+  border-radius: var(--r-sm);
+  transition: background var(--t1) ease;
+}
+
+.lib-group-row:hover {
+  background: var(--bg-hover);
+}
+
+.lib-group-row.is-focused {
+  background: var(--accent-soft);
+}
+
+.lib-group-main {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  width: 100%;
+  height: 36px;
+  padding: 0 var(--s2) 0 var(--s3);
+  color: inherit;
+  text-align: left;
+  border-radius: var(--r-sm);
+}
+
+.lib-group-row.is-focused .lib-group-main {
+  color: var(--accent);
+}
+
+.lib-group-tools {
+  position: absolute;
+  top: 50%;
+  right: 6px;
+  display: flex;
+  gap: 2px;
+  transform: translateY(-50%);
+  opacity: 0;
+  transition: opacity var(--t1) ease;
+}
+
+.lib-group-row:hover .lib-group-tools,
+.lib-group-row:focus-within .lib-group-tools {
+  opacity: 1;
+}
+
+.lib-group-row:hover .lib-nav-count {
+  opacity: 0;
+}
+
+.lib-tool-btn {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: var(--r-xs);
+  color: var(--text-4);
+  background: rgba(12, 15, 22, 0.85);
+}
+
+.lib-tool-btn:hover {
+  background: rgba(255, 255, 255, 0.12);
+  color: var(--text-1);
+}
+
+.lib-tool-btn.danger:hover {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+.lib-group-rename {
+  padding: 2px 4px 4px;
+}
+
+.lib-group-rename-input {
+  width: 100%;
+  height: 32px;
+  border-radius: var(--r-xs);
+  border: 1px solid var(--accent-line);
+  padding: 0 var(--s2);
+  background: var(--bg-inset);
+  color: var(--text-1);
+  font-size: var(--fs-md);
+  outline: none;
+}
+
+.lib-rail-foot {
+  flex-shrink: 0;
+  margin-top: var(--s3);
+  padding-top: var(--s3);
+  border-top: 1px solid var(--line-hair);
+}
+
+.lib-new-group {
+  display: flex;
+  gap: var(--s2);
+}
+
+.lib-new-group input {
+  flex: 1;
+  min-width: 0;
+  height: 32px;
+  border-radius: var(--r-xs);
+  border: 1px solid var(--line-hair);
+  padding: 0 var(--s2);
+  background: var(--bg-inset);
+  color: var(--text-1);
+  font-size: var(--fs-md);
+  outline: none;
+  transition: border-color var(--t1) ease;
+}
+
+.lib-new-group input::placeholder {
+  color: var(--text-4);
+}
+
+.lib-new-group input:focus {
+  border-color: var(--accent-line);
+}
+
+.lib-new-group button {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  flex-shrink: 0;
+  border-radius: var(--r-xs);
+  border: 1px solid var(--line-hair);
+  background: var(--bg-raise);
+  color: var(--text-3);
+  transition:
+    background var(--t1) ease,
+    color var(--t1) ease;
+}
+
+.lib-new-group button:hover {
+  background: var(--accent-soft);
+  border-color: var(--accent-line);
+  color: var(--accent);
+}
+

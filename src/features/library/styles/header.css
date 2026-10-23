@@ -1,0 +1,261 @@
+/* =============================== 顶栏 =============================== */
+
+.lib-top {
+  grid-column: 1 / -1;
+  position: relative;
+  /* 顶栏内含设置浮层，需压过同样带 backdrop-filter 的兄弟面板 */
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  gap: var(--s4);
+  height: 54px;
+  padding: 0 var(--s3);
+  border-radius: var(--r-lg);
+  background:
+    linear-gradient(
+        108deg,
+        transparent 34%,
+        rgba(147, 166, 255, 0.09) 47%,
+        rgba(121, 223, 208, 0.05) 53%,
+        transparent 66%
+      )
+      no-repeat,
+    var(--bg-panel);
+  background-size: 260% 100%, auto;
+  border: 1px solid var(--line-hair);
+  backdrop-filter: blur(22px) saturate(140%);
+  box-shadow: var(--sh-2);
+  animation:
+    fade-rise var(--t4) var(--e-out) both,
+}
+
+.lib-brand {
+  display: flex;
+  align-items: center;
+  gap: var(--s3);
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+}
+
+/* 品牌标识：透明底，只保留描边图形本身 */
+.lib-brand-mark {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  flex-shrink: 0;
+  border-radius: var(--r-sm);
+  color: var(--accent);
+  background: transparent;
+  border: none;
+  box-shadow: none;
+}
+
+.lib-brand-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  line-height: 1.25;
+}
+
+.lib-brand-name {
+  margin: 0;
+  font-size: var(--fs-md);
+  font-weight: 650;
+  letter-spacing: 0.01em;
+  color: var(--text-1);
+}
+
+.lib-brand-sub {
+  margin: 0;
+  font-size: var(--fs-2xs);
+  color: var(--text-4);
+  white-space: nowrap;
+}
+
+/* 搜索框自适应：弹性吃剩余空间（max 封顶、min 保底），
+ * margin auto 均分两侧空白 → 视觉居中；窗口缩小时随流收缩不压两侧按钮 */
+.lib-search {
+  flex: 1 1 240px;
+  min-width: 150px;
+  max-width: 460px;
+  margin: 0 auto;
+}
+
+.lib-search-field {
+  display: flex;
+  align-items: center;
+  height: 34px;
+  padding: 0 var(--s3);
+  border-radius: var(--r-sm);
+  border: 1px solid var(--line-hair);
+  background: var(--bg-inset);
+  transition:
+    border-color var(--t2) ease,
+    background var(--t2) ease,
+    box-shadow var(--t2) ease;
+}
+
+.lib-search-field:hover {
+  border-color: var(--line);
+}
+
+.lib-search-field:focus-within {
+  border-color: var(--accent-line);
+  background: rgba(6, 8, 13, 0.6);
+  box-shadow: 0 0 0 4px rgba(147, 166, 255, 0.1);
+}
+
+.lib-search-field > svg {
+  flex-shrink: 0;
+  color: var(--text-4);
+  transition: color var(--t2) ease;
+}
+
+.lib-search-field:focus-within > svg {
+  color: var(--accent);
+}
+
+.lib-search-input {
+  flex: 1;
+  min-width: 0;
+  margin-left: var(--s2);
+  border: none;
+  background: transparent;
+  font-size: var(--fs-md);
+  color: var(--text-1);
+  outline: none;
+}
+
+/* ---------- 搜索域选择器（搜索范围：当前分组 / 任意分组）---------- */
+
+.lib-scope-wrap {
+  position: relative;
+  flex-shrink: 0;
+  margin-left: var(--s2);
+}
+
+.lib-scope {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  max-width: 128px;
+  padding: 3px var(--s2);
+  border: 1px solid var(--line-hair);
+  border-radius: var(--r-sm);
+  background: var(--bg-raise);
+  color: var(--text-2);
+  font-size: var(--fs-xs);
+  cursor: pointer;
+  white-space: nowrap;
+  transition:
+    border-color var(--t2) ease,
+    color var(--t2) ease,
+    background var(--t2) ease;
+}
+
+.lib-scope:hover {
+  border-color: var(--line);
+  color: var(--text-1);
+}
+
+.lib-scope-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.lib-scope-pop {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 40;
+  min-width: 168px;
+  padding: var(--s1);
+  border-radius: var(--r-md);
+  border: 1px solid var(--line);
+  background: rgba(28, 32, 44, 0.96);
+  box-shadow: var(--sh-pop);
+  animation: pop-in 140ms var(--e-out) both;
+}
+
+.lib-scope-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s3);
+  width: 100%;
+  padding: 6px var(--s2);
+  border: none;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--text-2);
+  font-size: var(--fs-sm);
+  cursor: pointer;
+  text-align: left;
+  transition:
+    background var(--t1) ease,
+    color var(--t1) ease;
+}
+
+.lib-scope-item:hover {
+  background: var(--bg-hover);
+  color: var(--text-1);
+}
+
+.lib-scope-item.active {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.lib-search-input:focus-within {
+  box-shadow: none;
+}
+
+.lib-search-input::placeholder {
+  color: var(--text-4);
+}
+
+.lib-search-clear {
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border-radius: var(--r-pill);
+  color: var(--text-4);
+  transition:
+    background var(--t1) ease,
+    color var(--t1) ease;
+}
+
+.lib-search-clear:hover {
+  background: var(--bg-active);
+  color: var(--text-1);
+}
+
+.lib-kbd {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 6px;
+  border-radius: var(--r-xs);
+  border: 1px solid var(--line-hair);
+  background: rgba(255, 255, 255, 0.04);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-4);
+  white-space: nowrap;
+}
+
+.lib-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--s2);
+  flex: 0 1 auto;
+  min-width: 0;
+}
+
+.lib-settings-wrap {
+  position: relative;
+}
+
